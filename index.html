@@ -2,6 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <title>agenttel</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
   :root { color-scheme: dark; --bg:#0f1115; --fg:#d8dee9; --dim:#7b8494; --card:#171a21; --line:#262b36; --ok:#5fb865; --err:#e06c75; --warn:#e5c07b; --acc:#61afef; --model:#4a5160; }
   * { box-sizing:border-box; }
@@ -128,7 +129,8 @@ const pc = (a, b) => b ? Math.round(100*a/b) + "%" : "–";
 const setHTML = (el, html) => el.replaceChildren(document.createRange().createContextualFragment(html)); // all interpolations pass through esc()
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const base = p => (p||"").split("/").slice(-2).join("/");
-const hit = u => u && (u.input + u.cacheRead) ? u.cacheRead / (u.input + u.cacheRead) : null;
+const sumKnown = values => values.length && values.every(Number.isFinite) ? values.reduce((a, b) => a + b, 0) : null;
+const hit = u => u && Number.isFinite(u.input) && Number.isFinite(u.cacheRead) && (u.input + u.cacheRead) ? u.cacheRead / (u.input + u.cacheRead) : null;
 // Parse JSON that may have been cut mid-way (legacy 200-char cap): close open string/brackets, drop a dangling key.
 function lenient(s) {
   try { return { value: JSON.parse(s), truncated: false }; } catch {}
@@ -148,7 +150,7 @@ const TRUNC = `<span class="tag warn" title="recorded with an older 200-char cap
 const endOf = c => c.ms == null ? Date.now() : c.t + c.ms;
 const overlaps = (a, b) => a !== b && a.t < endOf(b) && b.t < endOf(a);
 const peers = (c, t) => (t?.tools ?? []).filter(o => overlaps(c, o) && o.parent !== c.id && c.parent !== o.id);
-const MAIN = { bash:"command", read:"path", write:"path", edit:"path", codemode:"code", web_search:"query", fetch_content:"url" };
+const MAIN = { bash:"command", Bash:"command", read:"path", Read:"file_path", write:"path", Write:"file_path", edit:"path", Edit:"file_path", apply_patch:"command", codemode:"code", web_search:"query", fetch_content:"url" };
 function summ(tool, args) {
   const p = lenient(args); if (!p) return esc(args);
   const o = p.value;
@@ -163,25 +165,33 @@ function summ(tool, args) {
 const chip = (k, v, cls = "") => v == null || v === "" ? "" : `<span class="chip ${cls}">${k} <b>${v}</b></span>`;
 const hitChip = h => h == null ? "" : chip("hit", Math.round(h*100)+"%", "hit" + (h < 0.5 ? " low" : ""));
 const lowHit = h => h != null && h < 0.5 ? hitChip(h) : ""; // cache hit is ~100% normally; only surface misses
-const costChip = c => c ? chip("cost", usd(c), "cost") : "";
+const costChip = c => chip("cost", usd(c) ?? "–", "cost");
 
 function ingest(e) {
   let s = sessions.get(e.sid);
-  if (!s) { s = { sid:e.sid, cwd:e.cwd, pid:e.pid, runs:[], tools:new Map(), compacts:0, cost:0, ver:0 }; sessions.set(e.sid, s); }
+  if (!s) { s = { sid:e.sid, source:e.source ?? "pi", scope:e.scope, cwd:e.cwd, pid:e.pid, runs:[], tools:new Map(), compacts:0, cost:null, ver:0 }; sessions.set(e.sid, s); }
   Object.assign(s, { model:e.model ?? s.model, ctx:e.ctx ?? s.ctx, win:e.win ?? s.win, last:e.t });
   s.ver++; dirtySide = true;
+  // Hooks may be enabled during a response, after the prompt hook has already fired.
+  if (e.scope === "response" && e.type === "tool_start" && !s.busy) {
+    ingest({ ...e, type:"run_start", prompt:"[recording started during response]" });
+    ingest({ ...e, type:"turn_start", turn:0 });
+  }
   const run = s.runs[s.runs.length-1];
   const turn = run?.turns[run.turns.length-1];
   switch (e.type) {
-    case "run_start": s.runs.push({ n:s.runs.length+1, t:e.t, prompt:e.prompt, promptChars:e.promptChars, sysChars:e.sysChars, ntools:e.tools, turns:[], ms:null, in:0, out:0, cache:0, cost:0 }); s.busy = true; s.title ??= e.prompt; open.add(e.sid + "run" + s.runs.length); break;
+    case "run_start": s.runs.push({ n:s.runs.length+1, scope:e.scope, t:e.t, prompt:e.prompt, promptChars:e.promptChars, sysChars:e.sysChars, ntools:e.tools, turns:[], ms:null, in:null, out:null, cache:null, cost:null }); s.busy = true; s.title ??= e.prompt; open.add(e.sid + "run" + s.runs.length); break;
     case "turn_start": if (run) run.turns.push({ run, t:e.t, turn:e.turn, tools:[], ms:null }); break;
-    case "turn_end": if (turn) { Object.assign(turn, { ms:e.ms, usage:e.usage, stop:e.stop, error:e.error, text:e.text, thinking: typeof e.thinking === "string" ? e.thinking : undefined, model:e.model, ctx:e.ctx });
-      turn.toolMs = turn.tools.filter(c => !c.parent).reduce((a,c) => a + (c.ms||0), 0); turn.modelMs = Math.max(0, e.ms - turn.toolMs);
-      if (run && e.usage) { run.in += e.usage.input||0; run.out += e.usage.output||0; run.cache += e.usage.cacheRead||0; const c = e.usage.cost?.total||0; run.cost += c; s.cost += c; } } break;
+    case "turn_end": if (turn) { Object.assign(turn, { ms:e.ms ?? Math.max(0, e.t - turn.t), usage:e.usage, stop:e.stop, error:e.error, text:e.text, thinking: typeof e.thinking === "string" ? e.thinking : undefined, model:e.model, ctx:e.ctx });
+      turn.toolMs = turn.tools.filter(c => !c.parent).reduce((a,c) => a + (c.ms||0), 0); turn.modelMs = run.scope === "response" ? null : Math.max(0, turn.ms - turn.toolMs);
+      run.in = sumKnown(run.turns.map(t => t.usage?.input)); run.out = sumKnown(run.turns.map(t => t.usage?.output));
+      run.cache = sumKnown(run.turns.map(t => t.usage?.cacheRead)); run.cost = sumKnown(run.turns.map(t => t.usage?.cost?.total));
+      s.cost = sumKnown(s.runs.map(r => r.cost)); } break;
     case "tool_start": { const tc = { id:e.id, parent:e.parent, tool:e.tool, args:e.args, t:e.t, ms:null, run, turn: turn?.turn }; s.tools.set(e.id, tc);
       (turn ?? (run && (run.turns.push({ run, t:e.t, turn:0, tools:[], ms:null }), run.turns[0])))?.tools.push(tc); break; }
-    case "tool_end": { const tc = s.tools.get(e.id); if (tc) Object.assign(tc, { ms:e.ms, isError:e.isError, out:e.out, result:e.result ?? e.err }); break; }
-    case "run_end": if (run) run.ms = e.ms; s.busy = false; if (ready && filt.notify && document.hidden) new Notification(`pi done · ${base(s.cwd)}`, { body: `${ms(e.ms)} · ${run?.turns.length ?? 0} turns · ${(run?.prompt||"").slice(0,80)}` }); break;
+    case "tool_end": { const tc = s.tools.get(e.id); if (tc) Object.assign(tc, { ms:e.ms ?? Math.max(0, e.t - tc.t), args:e.args ?? tc.args, isError:e.isError, out:e.out, result:e.result ?? e.err }); break; }
+    case "run_end": if (run) run.ms = e.ms ?? Math.max(0, e.t - run.t); s.busy = false; if (ready && filt.notify && document.hidden) new Notification(`${s.source} done · ${base(s.cwd)}`, { body: `${ms(run?.ms)} · ${run?.turns.length ?? 0} ${run?.scope === "response" ? "responses" : "turns"} · ${(run?.prompt||"").slice(0,80)}` }); break;
+    case "session_end": if (s.busy) { ingest({ ...e, type:"turn_end", stop:"interrupted" }); ingest({ ...e, type:"run_end" }); } break;
     case "compact": s.compacts++; if (run) run.compact = e.reason; break;
   }
 }
@@ -204,27 +214,27 @@ function flags(run) {
   return f.join("");
 }
 
-const pct = s => s.ctx && s.win ? Math.min(100, Math.round(100*s.ctx/s.win)) : 0;
-const ctxBar = s => `<div class="bar"><i class="${pct(s)>80?"err":pct(s)>60?"warn":""}" style="width:${pct(s)}%"></i></div>`;
+const pct = s => s.ctx != null && s.win ? Math.min(100, Math.round(100*s.ctx/s.win)) : null;
+const ctxBar = s => pct(s) == null ? "" : `<div class="bar"><i class="${pct(s)>80?"err":pct(s)>60?"warn":""}" style="width:${pct(s)}%"></i></div>`;
 
 function renderSide() {
   dirtySide = false;
   const q = sq.value.toLowerCase();
-  const list = [...sessions.values()].sort((a,b) => b.last - a.last).filter(s => !q || (s.cwd + " " + s.title + " " + s.model).toLowerCase().includes(q));
+  const list = [...sessions.values()].sort((a,b) => b.last - a.last).filter(s => !q || (s.source + " " + s.cwd + " " + s.title + " " + s.model).toLowerCase().includes(q));
   const top = side.scrollTop;
   setHTML(side, list.map(s => `<div class="s ${s.sid===selected?"on":""}" data-sid="${esc(s.sid)}">
-    <div>${s.busy ? '<span class="live">●</span>' : '<span class="dim">○</span>'} ${esc(base(s.cwd))} <span class="dim">#${s.pid}</span></div>
+    <div>${s.busy ? '<span class="live">●</span>' : '<span class="dim">○</span>'} ${esc(base(s.cwd))} <span class="dim">${esc(s.source)}${s.pid != null ? " #" + esc(s.pid) : ""}</span></div>
     <div class="ttl">${esc(s.title ?? "")}</div>
     <div class="cwd">${esc(s.model)} · ${s.runs.length} runs${s.cost ? " · " + usd(s.cost) : ""} · ${new Date(s.last).toLocaleTimeString()}</div>${ctxBar(s)}</div>`).join(""));
   side.scrollTop = top;
 }
 
 function renderStats(s) {
-  const tot = s.runs.reduce((a,r) => ({ in:a.in+r.in, out:a.out+r.out, cache:a.cache+r.cache }), { in:0, out:0, cache:0 });
+  const tot = { in:sumKnown(s.runs.map(r => r.in)), out:sumKnown(s.runs.map(r => r.out)), cache:sumKnown(s.runs.map(r => r.cache)) };
   setHTML(stats, `<h2>${esc(s.cwd)}</h2>
-  <div class="kv"><span>model <b>${esc(s.model)}</b></span><span>ctx <b>${fmt(s.ctx)} / ${fmt(s.win)} (${pct(s)}%)</b></span>
+  <div class="kv"><span>agent <b>${esc(s.source)}</b></span><span>model <b>${esc(s.model ?? "–")}</b></span><span>ctx <b>${fmt(s.ctx)} / ${fmt(s.win)} (${pct(s) == null ? "–" : pct(s) + "%"})</b></span>
     <span>Σ in <b>${fmt(tot.in)}</b></span><span>Σ out <b>${fmt(tot.out)}</b></span>${hitChip(hit({ input:tot.in, cacheRead:tot.cache }))}${costChip(s.cost)}${s.compacts ? `<span>compacts <b>${s.compacts}</b></span>` : ""}
-    ${(r => r ? `<span title="system prompt ≈tokens / active tools (latest run)">sys ≈<b>${fmt(Math.round(r.sysChars/4))}</b> · tools <b>${r.ntools ?? "–"}</b></span>` : "")(s.runs.at(-1))}<span class="ttl" title="${esc(s.sid)}">${esc(s.sid.slice(0, 8))}</span></div>
+    ${(r => r ? `<span title="system prompt ≈tokens / active tools (latest run)">sys ≈<b>${fmt(r.sysChars == null ? null : Math.round(r.sysChars/4))}</b> · tools <b>${r.ntools ?? "–"}</b></span>` : "")(s.runs.at(-1))}<span class="ttl" title="${esc(s.sid)}">${esc(s.sid.slice(0, 8))}</span></div>
   ${ctxBar(s)}`);
 }
 
@@ -245,12 +255,13 @@ function renderRun(r) {
   const h = hit({ input:r.in, cacheRead:r.cache }), k = r.run?.sid ?? selected;
   return `<details class="run" ${open.has(selected + "run" + r.n) ? "open" : ""} data-run="${r.n}"><summary>
     <div class="th"><span class="n">#${r.n}</span><span class="dim">${new Date(r.t).toLocaleTimeString()}</span><span>${r.ms==null?'<span class="live">running…</span>':ms(r.ms)}</span>
-      ${chip("turns", r.turns.length)}${chip("in", fmt(r.in))}${chip("out", fmt(r.out))}${lowHit(h)}${costChip(r.cost)}</div>
+      ${chip(r.scope === "response" ? "responses" : "turns", r.turns.length)}${chip("in", fmt(r.in))}${chip("out", fmt(r.out))}${lowHit(h)}${costChip(r.cost)}</div>
     <div class="prompt ${open.has("p"+r.n)?"x":""}" data-x="p${r.n}">${esc(r.prompt)}</div><div class="flags">${flags(r)}</div>${waterfall(r)}</summary>
     ${r.turns.map(renderTurn).join("")}</details>`;
 }
 
 function waterfall(r) {
+  if (r.scope === "response") return ""; // Hooks do not expose individual model-call timing.
   const total = r.ms ?? r.turns.reduce((a,t) => a + (t.ms||0), 0); if (!total) return "";
   return `<div class="wf">${r.turns.map(t => t.ms == null ? "" :
     `<i class="m" style="width:${100*t.modelMs/total}%" title="turn ${t.turn} model ${ms(t.modelMs)}"></i>` +
@@ -262,8 +273,8 @@ function renderTurn(t) {
   const bad = t.error || t.stop === "error", slow = t.ms > 60e3;
   const k = "t" + t.run.n + "_" + t.turn;
   return `<div class="turn ${bad?"bad":slow?"slow":""}">
-    <div class="th"><span class="n">turn ${t.turn}</span>
-      ${t.ms==null?'<span class="live">running…</span>':`<span>${ms(t.ms)}</span><span class="tbar" title="model ${ms(t.modelMs)} / tools ${ms(t.toolMs)}"><i style="width:${pc(t.modelMs,t.ms)}"></i><i style="width:${pc(t.toolMs,t.ms)}"></i></span>`}
+    <div class="th"><span class="n">${t.run.scope === "response" ? "response" : "turn " + t.turn}</span>
+      ${t.ms==null?'<span class="live">running…</span>':`<span>${ms(t.ms)}</span>${t.run.scope === "response" ? "" : `<span class="tbar" title="model ${ms(t.modelMs)} / tools ${ms(t.toolMs)}"><i style="width:${pc(t.modelMs,t.ms)}"></i><i style="width:${pc(t.toolMs,t.ms)}"></i></span>`}`}
       <span title="in ${fmt(u.input)} · cacheRead ${fmt(u.cacheRead)} · hit ${h!=null?Math.round(h*100)+"%":"–"} · cost ${usd(u.cost?.total) ?? "–"}">${chip("out", fmt(u.output))}${u.reasoning ? chip("think", fmt(u.reasoning)) : ""}${lowHit(h)}${chip("ctx", fmt(t.ctx))}</span>
       ${t.stop && t.stop !== "toolUse" && t.stop !== "stop" ? `<span class="${bad?"err":"dim"}">${esc(t.stop)}</span>` : ""}</div>
     ${t.error ? `<div class="errmsg">${esc(t.error)}</div>` : ""}
@@ -273,7 +284,7 @@ function renderTurn(t) {
     ${t.text ? `<div class="text ${open.has(k)?"x":""}" data-x="${k}">${esc(t.text)}</div>` : ""}</div>`;
 }
 
-const mark = c => c.ms==null?'<span class="live">●</span>':c.isError?'<span class="err">✗</span>':'<span class="ok">✓</span>';
+const mark = c => c.ms==null?'<span class="live">●</span>':c.isError==null?'<span class="dim" title="terminal status unavailable">?</span>':c.isError?'<span class="err">✗</span>':'<span class="ok">✓</span>';
 function renderTool(c, t) {
   const n = t ? peers(c, t).length : 0;
   return `<div class="tool ${c.parent?"nested":""} ${sel===c.id?"sel":""} ${match(c)?"":"hide"}" data-id="${esc(c.id)}">
@@ -298,11 +309,11 @@ function executed(c, s) {
   return note + executedBody(c, s, a);
 }
 function executedBody(c, s, a) {
-  switch (c.tool) {
+  switch (c.tool.toLowerCase()) {
     case "bash": return `<div class="kvs"><span>cwd</span><span>${esc(s.cwd)}</span>${a.timeout ? `<span>timeout</span><span>${esc(a.timeout)}s</span>` : ""}</div><pre class="sh">$ ${esc(a.command)}</pre>`;
-    case "read": { const from = a.offset ?? 1; return `<div class="kvs"><span>file</span><span>${esc(a.path)}</span><span>lines</span><span>${from} – ${a.limit ? from + a.limit - 1 : "end"}</span></div>`; }
-    case "write": return `<div class="kvs"><span>file</span><span>${esc(a.path)}</span><span>size</span><span>${fmt((a.content||"").length)} chars</span></div><pre>${esc(a.content)}</pre>`;
-    case "edit": return `<div class="kvs"><span>file</span><span>${esc(a.path)}</span><span>edits</span><span>${(a.edits||[]).length}</span></div>` + (a.edits||[]).map((e, i) => `<h5>edit ${i+1}</h5><pre class="diff">${diff(e.oldText, e.newText)}</pre>`).join("");
+    case "read": { const from = a.offset ?? 1; return `<div class="kvs"><span>file</span><span>${esc(a.path ?? a.file_path)}</span><span>lines</span><span>${from} – ${a.limit ? from + a.limit - 1 : "end"}</span></div>`; }
+    case "write": return `<div class="kvs"><span>file</span><span>${esc(a.path ?? a.file_path)}</span><span>size</span><span>${fmt((a.content||"").length)} chars</span></div><pre>${esc(a.content)}</pre>`;
+    case "edit": { const edits = a.edits ?? [{ oldText:a.old_string, newText:a.new_string }]; return `<div class="kvs"><span>file</span><span>${esc(a.path ?? a.file_path)}</span><span>edits</span><span>${edits.length}</span>${a.replace_all ? "<span>replace all</span><span>yes</span>" : ""}</div>` + edits.map((e, i) => `<h5>edit ${i+1}</h5><pre class="diff">${diff(e.oldText, e.newText)}</pre>`).join(""); }
     case "codemode": { const kids = [...s.tools.values()].filter(k => k.parent === c.id);
       return `<pre class="sh">${esc(a.code)}</pre>${kids.length ? `<h5>nested calls (${kids.length})</h5>` + kids.map(renderTool).join("") : ""}`; }
     default: return `<div class="kvs">${Object.entries(a).map(([k, v]) => `<span>${esc(k)}</span><span>${esc(typeof v === "string" ? v : JSON.stringify(v))}</span>`).join("")}</div>`;
@@ -314,7 +325,7 @@ function renderDetail() {
   mainEl.classList.toggle("has-detail", !!c);
   if (!c) return setHTML(detail, "");
   const parent = c.parent ? s.tools.get(c.parent) : null;
-  const status = c.ms==null?'<span class="live">● running</span>':c.isError?'<span class="err">✗ error</span>':'<span class="ok">✓ ok</span>';
+  const status = c.ms==null?'<span class="live">● running</span>':c.isError==null?'<span class="dim">? status unknown</span>':c.isError?'<span class="err">✗ error</span>':'<span class="ok">✓ ok</span>';
   setHTML(detail, `<div class="dh"><span class="name">${esc(c.tool)}</span>${status}<span class="dim">run #${c.run?.n} · turn ${c.turn}</span><button id="dclose" title="Esc">✕ close</button></div>
   <div class="kvs"><span>started</span><span>${new Date(c.t).toLocaleTimeString()}</span><span>duration</span><span class="${c.ms>10e3?"warn":""}">${ms(c.ms)}</span><span>output size</span><span>${c.out!=null?fmt(c.out)+" chars":"–"}</span>${parent?`<span>called by</span><span class="tool-link" data-id="${esc(parent.id)}" style="cursor:pointer;color:var(--acc)">${esc(parent.tool)} ↗</span>`:""}<span>id</span><span class="dim">${esc(c.id)}</span></div>
   ${(() => { const t = c.run?.turns.find(t => t.turn === c.turn), ps = peers(c, t); return ps.length ? `<h4>Parallel <small>${ps.length} overlapping</small></h4>${gantt(t, c)}${ps.map(renderTool).join("")}` : ""; })()}
@@ -334,32 +345,32 @@ function spark(turns) {
 function renderExec(s) {
   const turns = allTurns(s).filter(t => t.ms != null), tools = allTools(s).filter(c => c.ms != null && match(c));
   const wall = s.runs.reduce((a,r) => a + (r.ms||0), 0);
-  const modelMs = turns.reduce((a,t) => a + t.modelMs, 0), toolMs = turns.reduce((a,t) => a + t.toolMs, 0);
+  const modelMs = sumKnown(turns.map(t => t.modelMs)), toolMs = turns.reduce((a,t) => a + t.toolMs, 0);
   const byTool = new Map();
-  for (const c of tools) { const b = byTool.get(c.tool) ?? { tool:c.tool, n:0, err:0, ms:0, max:0, out:0 }; b.n++; b.err += c.isError?1:0; b.ms += c.ms; b.max = Math.max(b.max, c.ms); b.out += c.out||0; byTool.set(c.tool, b); }
+  for (const c of tools) { const b = byTool.get(c.tool) ?? { tool:c.tool, n:0, err:0, ms:0, max:0, out:0 }; b.n++; b.err = c.isError == null || b.err == null ? null : b.err + (c.isError ? 1 : 0); b.ms += c.ms; b.max = Math.max(b.max, c.ms); b.out += c.out||0; byTool.set(c.tool, b); }
   const rows = [...byTool.values()].sort((a,b) => b.ms - a.ms);
   const top = rows[0]?.ms || 1, sumRows = rows.reduce((a,b) => a + b.ms, 0); // nested calls (codemode→bash) count in both rows
   const slowTools = [...tools].sort((a,b) => b.ms - a.ms).slice(0, 20);
-  const slowTurns = [...turns].sort((a,b) => b.modelMs - a.modelMs).slice(0, 10);
+  const slowTurns = [...turns].sort((a,b) => (s.scope === "response" ? b.ms - a.ms : b.modelMs - a.modelMs)).slice(0, 10);
   const bar = (v, max, cls) => `<span class="bar"><i class="${cls}" style="width:${Math.round(100*v/max)}%"></i></span>`;
   return `
   <h3>time breakdown</h3>
-  <div class="bar" style="height:14px"><i class="model" style="width:${pc(modelMs, modelMs+toolMs)}"></i><i class="tool" style="width:${pc(toolMs, modelMs+toolMs)}"></i></div>
-  <div class="kv"><span>wall <b>${ms(wall)}</b></span><span><span style="color:var(--model)">■</span> model <b>${ms(modelMs)}</b> ${pc(modelMs, modelMs+toolMs)}</span><span><span class="acc">■</span> tools <b>${ms(toolMs)}</b> ${pc(toolMs, modelMs+toolMs)}</span><span>turns <b>${turns.length}</b></span><span>tool calls <b>${tools.length}</b></span>${costChip(s.cost)}</div>
+  ${s.scope === "response" ? "" : `<div class="bar" style="height:14px"><i class="model" style="width:${pc(modelMs, modelMs+toolMs)}"></i><i class="tool" style="width:${pc(toolMs, modelMs+toolMs)}"></i></div>`}
+  <div class="kv"><span>wall <b>${ms(wall)}</b></span><span><span style="color:var(--model)">■</span> model <b>${modelMs == null ? "–" : ms(modelMs)}</b> ${modelMs == null ? "" : pc(modelMs, modelMs+toolMs)}</span><span><span class="acc">■</span> tools <b>${ms(toolMs)}</b> ${modelMs == null ? "(sum)" : pc(toolMs, modelMs+toolMs)}</span><span>turns <b>${turns.length}</b></span><span>tool calls <b>${tools.length}</b></span>${costChip(s.cost)}</div>
   <h3>context</h3>${spark(turns)}
   <h3>by tool</h3>
   <table><tr><th>tool</th><th class="n">calls</th><th class="n">errors</th><th class="n">total</th><th class="n">avg</th><th class="n">max</th><th class="n">output</th><th>share</th></tr>
-  ${rows.map(b => `<tr><td>${esc(b.tool)}</td><td class="n">${b.n}</td><td class="n ${b.err?"err":""}">${b.err}</td><td class="n">${ms(b.ms)}</td><td class="n">${ms(Math.round(b.ms/b.n))}</td><td class="n">${ms(b.max)}</td><td class="n">${fmt(b.out)}c</td><td>${bar(b.ms, top, "tool")}${pc(b.ms, sumRows)}</td></tr>`).join("")}</table>
+  ${rows.map(b => `<tr><td>${esc(b.tool)}</td><td class="n">${b.n}</td><td class="n ${b.err?"err":""}">${fmt(b.err)}</td><td class="n">${ms(b.ms)}</td><td class="n">${ms(Math.round(b.ms/b.n))}</td><td class="n">${ms(b.max)}</td><td class="n">${fmt(b.out)}c</td><td>${bar(b.ms, top, "tool")}${pc(b.ms, sumRows)}</td></tr>`).join("")}</table>
   <h3>slowest tool calls</h3>
   <table><tr><th>ms</th><th>tool</th><th>run/turn</th><th>args</th></tr>
   ${slowTools.map(c => `<tr class="tool ${sel===c.id?"sel":""}" data-id="${esc(c.id)}"><td class="${c.ms>10e3?"warn":""}">${ms(c.ms)}</td><td>${c.isError?'<span class="err">✗</span> ':""}${esc(c.tool)}</td><td class="dim">#${c.run?.n}/${c.turn}</td><td class="w">${summ(c.tool, c.args)}</td></tr>`).join("")}</table>
-  <h3>slowest model turns</h3>
-  <table><tr><th>model ms</th><th>run/turn</th><th class="n">in</th><th class="n">out</th><th class="n">think</th><th class="n">cache hit</th><th class="n">cost</th><th>ctx</th><th>stop</th><th>text</th></tr>
-  ${slowTurns.map(t => { const u = t.usage||{}, h = hit(u); return `<tr><td class="${t.modelMs>60e3?"warn":""}">${ms(t.modelMs)}</td><td class="dim">#${t.run.n}/${t.turn}</td><td class="n">${fmt(u.input)}</td><td class="n">${fmt(u.output)}</td><td class="n">${fmt(u.reasoning)}</td><td class="n">${h!=null?Math.round(h*100)+"%":"–"}</td><td class="n">${usd(u.cost?.total) ?? "–"}</td><td>${fmt(t.ctx)}</td><td>${esc(t.stop)}</td><td class="w">${esc(t.text)}</td></tr>`; }).join("")}</table>
+  <h3>slowest ${s.scope === "response" ? "responses" : "model turns"}</h3>
+  <table><tr><th>${s.scope === "response" ? "response ms" : "model ms"}</th><th>run/turn</th><th class="n">in</th><th class="n">out</th><th class="n">think</th><th class="n">cache hit</th><th class="n">cost</th><th>ctx</th><th>stop</th><th>text</th></tr>
+  ${slowTurns.map(t => { const u = t.usage||{}, h = hit(u); return `<tr><td class="${t.modelMs>60e3?"warn":""}">${ms(t.run.scope === "response" ? t.ms : t.modelMs)}</td><td class="dim">#${t.run.n}/${t.turn}</td><td class="n">${fmt(u.input)}</td><td class="n">${fmt(u.output)}</td><td class="n">${fmt(u.reasoning)}</td><td class="n">${h!=null?Math.round(h*100)+"%":"–"}</td><td class="n">${usd(u.cost?.total) ?? "–"}</td><td>${fmt(t.ctx)}</td><td>${esc(t.stop)}</td><td class="w">${esc(t.text)}</td></tr>`; }).join("")}</table>
   <h3>runs</h3>
   <table><tr><th>#</th><th>wall</th><th>model / tools</th><th class="n">turns</th><th class="n">calls</th><th class="n">in</th><th class="n">out</th><th class="n">cache hit</th><th class="n">cost</th><th>prompt</th></tr>
   ${s.runs.map(r => { const tm = r.turns.reduce((a,t) => a + (t.modelMs||0), 0), tt = r.turns.reduce((a,t) => a + (t.toolMs||0), 0), h = hit({ input:r.in, cacheRead:r.cache });
-    return `<tr><td>#${r.n}</td><td>${ms(r.ms)}</td><td><span class="bar"><i class="model" style="width:${pc(tm, tm+tt)}"></i><i class="tool" style="width:${pc(tt, tm+tt)}"></i></span>${ms(tm)} / ${ms(tt)}</td><td class="n">${r.turns.length}</td><td class="n">${r.turns.reduce((a,t)=>a+t.tools.length,0)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.out)}</td><td class="n">${h!=null?Math.round(h*100)+"%":"–"}</td><td class="n">${usd(r.cost) ?? "–"}</td><td class="w">${esc(r.prompt)}</td></tr>`; }).join("")}</table>`;
+    return `<tr><td>#${r.n}</td><td>${ms(r.ms)}</td><td><span class="bar"><i class="model" style="width:${pc(tm, tm+tt)}"></i><i class="tool" style="width:${pc(tt, tm+tt)}"></i></span>${r.scope === "response" ? "–" : ms(tm)} / ${ms(tt)}</td><td class="n">${r.turns.length}</td><td class="n">${r.turns.reduce((a,t)=>a+t.tools.length,0)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.out)}</td><td class="n">${h!=null?Math.round(h*100)+"%":"–"}</td><td class="n">${usd(r.cost) ?? "–"}</td><td class="w">${esc(r.prompt)}</td></tr>`; }).join("")}</table>`;
 }
 
 // ---- interaction: never re-render #body on click; mutate classes in place and keep the clicked element where it is

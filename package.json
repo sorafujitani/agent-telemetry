@@ -1,7 +1,7 @@
 {
   "name": "agenttel",
   "version": "0.1.0",
-  "description": "Local telemetry and live trace viewer for the Pi coding agent",
+  "description": "Local telemetry and live trace viewer for Pi, Codex, and Claude Code",
   "type": "module",
   "packageManager": "pnpm@11.18.0",
   "license": "MIT",
@@ -13,11 +13,11 @@
     "url": "https://github.com/sorafujitani/agent-telemetry/issues"
   },
   "homepage": "https://github.com/sorafujitani/agent-telemetry#readme",
-  "keywords": ["pi-package", "pi", "telemetry", "agenttel"],
+  "keywords": ["pi-package", "pi", "codex", "claude-code", "telemetry", "agenttel"],
   "engines": { "node": ">=22" },
   "bin": { "agenttel": "./server.js" },
   "exports": { ".": "./index.js" },
-  "files": ["index.js", "config.js", "server.js", "index.html"],
+  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/agenttel"],
   "pi": { "extensions": ["./index.js"] },
   "scripts": {
     "test": "node --test",

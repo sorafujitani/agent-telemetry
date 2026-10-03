@@ -1,26 +1,7 @@
 /** Record Pi lifecycle events locally; /agenttel opens the live viewer. */
-import { appendFileSync, mkdirSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { DIR, FILE, URL } from "./config.js";
-
-const short = (v, n = 200) => {
-	const s = typeof v === "string" ? v : JSON.stringify(v) ?? "";
-	return s.length > n ? s.slice(0, n) + "…" : s;
-};
-const CAP = 32000; // ponytail: cap strings at 32k characters; raise if full payloads matter
-// Cap individual strings so argument objects remain valid JSON.
-const capDeep = (v) =>
-	typeof v === "string" ? (v.length > CAP ? v.slice(0, CAP) + `…[truncated ${v.length - CAP} chars]` : v)
-	: Array.isArray(v) ? v.map(capDeep)
-	: v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, capDeep(x)]))
-	: v;
-const resText = (r) =>
-	Array.isArray(r?.content)
-		? r.content.map((c) => (c.type === "text" ? c.text : `[${c.type}]`)).join("\n")
-		: typeof r === "string"
-			? r
-			: JSON.stringify(r) ?? "";
+import { openViewer } from "./viewer.js";
+import { URL } from "./config.js";
+import { appendEvents, short, capDeep, resText } from "./recorder.js";
 const partsOf = (m, type, key) =>
 	(m?.content ?? [])
 		.filter((c) => c.type === type)
@@ -37,7 +18,7 @@ export default function (pi) {
 		try {
 			const u = ctx.getContextUsage?.();
 			const line = {
-				t: Date.now(),
+				source: "pi",
 				sid: ctx.sessionManager?.getSessionId?.(),
 				cwd: ctx.cwd,
 				pid: process.pid,
@@ -47,8 +28,7 @@ export default function (pi) {
 				type,
 				...data,
 			};
-			mkdirSync(DIR, { recursive: true, mode: 0o700 });
-			appendFileSync(FILE, JSON.stringify(line) + "\n", { mode: 0o600 });
+			appendEvents([line]);
 		} catch (error) {
 			if (!warned) {
 				warned = true;
@@ -108,33 +88,6 @@ export default function (pi) {
 
 	pi.registerCommand("agenttel", {
 		description: `Open the agenttel viewer (${URL})`,
-		handler: async (_args, ctx) => {
-			const alive = () => fetch(URL + "/ping", { signal: AbortSignal.timeout(500) })
-				.then(async (r) => r.ok && await r.text() === "agenttel").catch(() => false);
-			if (!await alive()) {
-				const server = fileURLToPath(new globalThis.URL("./server.js", import.meta.url));
-				const child = spawn(process.execPath, [server], { detached: true, stdio: "ignore" });
-				let failed = false;
-				child.on("error", () => { failed = true; });
-				child.on("exit", () => { failed = true; });
-				child.unref();
-				for (let i = 0; i < 30 && !failed; i++) {
-					if (await alive()) break;
-					await new Promise((resolve) => setTimeout(resolve, 100));
-				}
-				if (!await alive()) {
-					ctx.ui.notify(`agenttel: could not start the viewer at ${URL}. Check the port or run agenttel in a terminal.`, "error");
-					return;
-				}
-			}
-			const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32" : "xdg-open";
-			const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", URL] : [URL];
-			const browser = spawn(command, args, { detached: true, stdio: "ignore" });
-			const fallback = () => ctx.ui.notify(`agenttel: open ${URL} in your browser`, "warning");
-			browser.on("error", fallback);
-			browser.on("exit", (code) => { if (code) fallback(); });
-			browser.unref();
-			ctx.ui.notify(`agenttel: ${URL}`, "info");
-		},
+		handler: (_args, ctx) => openViewer((message, level) => ctx.ui.notify(message, level)),
 	});
 }
