@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync, existsSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync, existsSync, realpathSync, readdirSync, symlinkSync, lstatSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,7 +24,7 @@ execFileSync(npm, ["install", "--prefix", prefix, "--ignore-scripts", "--no-audi
 const installed = join(prefix, "node_modules", "agenttel");
 
 test("npm package contains all runtime assets and exposes the CLI and Pi extension", () => {
-	assert.deepEqual(packed.files.map((f) => f.path).sort(), ["LICENSE", "README.md", "config.js", "favicon.svg", "hooks.js", "index.html", "index.js", "package.json", "recorder.js", "server.js", "skills/agenttel/SKILL.md", "viewer.js"]);
+	assert.deepEqual(packed.files.map((f) => f.path).sort(), ["LICENSE", "README.md", "config.js", "favicon.svg", "hooks.js", "index.html", "index.js", "package.json", "recorder.js", "server.js", "setup.js", "skills/agenttel/SKILL.md", "viewer.js"]);
 	const pkg = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
 	assert.deepEqual(pkg.pi.extensions, ["./index.js"]);
 	assert.equal(pkg.bin.agenttel, "./server.js");
@@ -235,7 +235,7 @@ test("hook input and storage failures are non-blocking and invalid CLI sources f
 		assert.match(result.stderr, /unable to record hook/);
 		assert.equal(readFileSync(dir, "utf8"), "not a directory");
 	}
-	for (const args of [["hook", "other"], ["hooks"], ["hooks", "codex", "extra"]]) {
+	for (const args of [["hook", "other"], ["hooks"], ["hooks", "codex", "extra"], ["setup"], ["setup", "pi"], ["setup", "codex", "extra"]]) {
 		const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", timeout: 3000 });
 		assert.equal(result.status, 1);
 		assert.match(result.stderr, /codex or claude/);
@@ -315,6 +315,105 @@ test("bundled skill registration is idempotent and preserves existing skills", (
 	assert.match(result.stderr, /Skill already exists/);
 	assert.equal(readFileSync(join(conflict, "SKILL.md"), "utf8"), "existing skill");
 	assert.equal(existsSync(join(conflictHome, ".agents", "skills", "agenttel")), false);
+});
+
+test("setup merges only the selected agent, backs up settings, and is idempotent", () => {
+	const cli = join(installed, "server.js");
+	for (const source of ["codex", "claude"]) {
+		const home = join(temp, `setup-${source}`), logs = join(home, "traces");
+		const env = { ...process.env, HOME: home, USERPROFILE: home, AGENTTEL_DIR: logs };
+		const file = join(home, source === "codex" ? ".codex" : ".claude", source === "codex" ? "hooks.json" : "settings.json");
+		mkdirSync(dirname(file), { recursive: true });
+		const generated = JSON.parse(execFileSync(process.execPath, [cli, "hooks", source], { env, encoding: "utf8" }));
+		const other = { type: "command", command: "echo keep", timeout: 10 };
+		const original = { env: { KEEP: "value" }, permissions: { allow: ["Read"] }, hooks: {
+			PermissionRequest: [{ matcher: "Bash", hooks: [other] }],
+			UserPromptSubmit: [{ matcher: "", hooks: [other, generated.hooks.UserPromptSubmit[0].hooks[0], generated.hooks.UserPromptSubmit[0].hooks[0]] }],
+		} };
+		const raw = JSON.stringify(original, null, 4) + "\n";
+		const linked = source === "claude" && process.platform !== "win32";
+		const target = linked ? join(home, "dotfiles-settings.json") : file;
+		writeFileSync(target, raw);
+		if (linked) symlinkSync(target, file);
+		if (process.platform !== "win32") chmodSync(target, 0o640);
+		const first = spawnSync(process.execPath, [cli, "setup", source], { env, encoding: "utf8", timeout: 3000 });
+		assert.equal(first.status, 0, first.stderr);
+		assert.match(first.stdout, /setup complete/);
+		assert.ok(first.stdout.includes(`Hooks: ${file}`));
+		assert.ok(first.stdout.includes(`Logs: ${join(logs, "events.jsonl")}`));
+		const config = JSON.parse(readFileSync(file, "utf8"));
+		assert.deepEqual(config.env, original.env);
+		assert.deepEqual(config.permissions, original.permissions);
+		assert.deepEqual(config.hooks.PermissionRequest, original.hooks.PermissionRequest);
+		assert.deepEqual(config.hooks.UserPromptSubmit[0], { matcher: "", hooks: [other] });
+		for (const [event, entries] of Object.entries(generated.hooks)) {
+			const command = entries[0].hooks[0].command;
+			assert.equal(config.hooks[event].flatMap(entry => entry.hooks).filter(handler => handler.command === command).length, 1);
+		}
+		const skillRoot = source === "codex" ? ".agents" : ".claude";
+		assert.equal(realpathSync(join(home, skillRoot, "skills", "agenttel")), realpathSync(join(installed, "skills", "agenttel")));
+		assert.equal(existsSync(join(home, source === "codex" ? ".claude" : ".codex")), false);
+		const backups = () => readdirSync(dirname(file)).filter(name => name.startsWith(`${file.split(/[\\/]/).at(-1)}.agenttel-backup-`));
+		assert.equal(backups().length, 1);
+		const backup = join(dirname(file), backups()[0]);
+		assert.equal(readFileSync(backup, "utf8"), raw);
+		if (process.platform !== "win32") {
+			assert.equal(statSync(backup).mode & 0o777, 0o600);
+			assert.equal(statSync(file).mode & 0o777, 0o640);
+		}
+		if (linked) assert.equal(lstatSync(file).isSymbolicLink(), true);
+		const saved = readFileSync(file, "utf8"), mtime = statSync(file).mtimeMs;
+		const second = spawnSync(process.execPath, [cli, "setup", source], { env, encoding: "utf8", timeout: 3000 });
+		assert.equal(second.status, 0, second.stderr);
+		assert.match(second.stdout, /already configured/);
+		assert.equal(readFileSync(file, "utf8"), saved);
+		assert.equal(statSync(file).mtimeMs, mtime);
+		assert.equal(backups().length, 1);
+		assert.equal(existsSync(`${file}.agenttel.lock`), false);
+		const recorded = spawnSync(config.hooks.UserPromptSubmit.at(-1).hooks[0].command, { shell: true, env, input: JSON.stringify({ session_id: "setup-check", hook_event_name: "UserPromptSubmit", prompt: "hello" }), encoding: "utf8", timeout: 3000 });
+		assert.equal(recorded.status, 0, recorded.stderr);
+		assert.deepEqual(JSON.parse(recorded.stdout), {});
+		assert.equal(JSON.parse(readFileSync(join(logs, "events.jsonl"), "utf8").split("\n")[0]).sid, `${source}:setup-check`);
+		const freshHome = join(temp, `setup-fresh-${source}`);
+		const fresh = spawnSync(process.execPath, [cli, "setup", source], { env: { ...env, HOME: freshHome, USERPROFILE: freshHome }, encoding: "utf8", timeout: 3000 });
+		assert.equal(fresh.status, 0, fresh.stderr);
+		const freshFile = join(freshHome, source === "codex" ? ".codex" : ".claude", source === "codex" ? "hooks.json" : "settings.json");
+		assert.deepEqual(JSON.parse(readFileSync(freshFile, "utf8")), generated);
+		assert.doesNotMatch(fresh.stdout, /Backup:/);
+		assert.equal(existsSync(join(freshHome, ".pi")), false);
+		if (process.platform !== "win32") assert.equal(statSync(freshFile).mode & 0o777, 0o600);
+	}
+});
+
+test("setup refuses invalid, disabled, stale, or busy settings without changing them", () => {
+	const cli = join(installed, "server.js");
+	const cases = ["not JSON", "[]", '{"hooks":[]}', '{"hooks":{"Stop":null}}', '{"hooks":{"Stop":[{}]}}', '{"hooks":{"Stop":[{"hooks":[null]}]}}', '{"disableAllHooks":true}', JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "'node' '/old/agenttel/server.js' hook claude" }] }] } })];
+	for (const [n, raw] of cases.entries()) {
+		const home = join(temp, `setup-invalid-${n}`), file = join(home, ".claude", "settings.json");
+		mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, raw);
+		const result = spawnSync(process.execPath, [cli, "setup", "claude"], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8", timeout: 3000 });
+		assert.equal(result.status, 1);
+		assert.match(result.stderr, /agenttel:/);
+		assert.equal(readFileSync(file, "utf8"), raw);
+		assert.equal(existsSync(join(home, ".claude", "skills", "agenttel")), false);
+		assert.deepEqual(readdirSync(dirname(file)), ["settings.json"]);
+	}
+	const home = join(temp, "setup-busy"), file = join(home, ".codex", "hooks.json");
+	mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "{}"); writeFileSync(`${file}.agenttel.lock`, "busy");
+	const busy = spawnSync(process.execPath, [cli, "setup", "codex"], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8", timeout: 3000 });
+	assert.equal(busy.status, 1);
+	assert.match(busy.stderr, /Setup lock exists/);
+	assert.equal(readFileSync(file, "utf8"), "{}");
+	assert.equal(readFileSync(`${file}.agenttel.lock`, "utf8"), "busy");
+	assert.equal(existsSync(join(home, ".agents", "skills", "agenttel")), false);
+});
+
+test("documented local npm installation works without pnpm or a published package", { skip: process.platform === "win32", timeout: 15000 }, () => {
+	const bin = join(temp, "no-pnpm"), prefix = join(temp, "global-install");
+	mkdirSync(bin); writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+	execFileSync(npm, ["install", "--global", "--prefix", prefix, "--offline", "--no-audit", "--no-fund", root], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8", timeout: 10000 });
+	const help = execFileSync(join(prefix, "bin", "agenttel"), ["--help"], { encoding: "utf8", timeout: 3000 });
+	assert.match(help, /agenttel setup <codex\|claude>/);
 });
 
 test("new installations use a shared directory and existing Pi directories are reused", { skip: process.platform === "win32" }, () => {

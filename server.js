@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 // Serve the local trace viewer and stream events.jsonl over SSE.
 import { createServer } from "node:http";
-import { readFileSync, statSync, openSync, readSync, closeSync, watch, existsSync, truncateSync, mkdirSync, lstatSync, realpathSync, symlinkSync } from "node:fs";
+import { readFileSync, statSync, openSync, readSync, closeSync, watch, existsSync, truncateSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { installSkill, setupAgent } from "./setup.js";
 import { openViewer } from "./viewer.js";
 import { DIR, FILE, PORT, URL } from "./config.js";
 import { hookConfig, recordHook, checkSource } from "./hooks.js";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
 	console.log(`Usage: agenttel
+       agenttel setup <codex|claude>
        agenttel open
        agenttel install-skill
        agenttel hooks <codex|claude>
        agenttel hook <codex|claude>
 
 Start the local telemetry viewer. Press Ctrl+C to stop.
+"setup" merges recording Hooks and registers the selected agent\'s viewer skill.
+Existing unrelated settings are preserved; changed settings are backed up.
 "open" starts it in the background and opens the browser.
 "install-skill" registers $agenttel in Codex and /agenttel in Claude Code.
 "hooks" prints configuration to merge into your agent settings.
@@ -34,19 +36,23 @@ if (process.argv[2] === "open" && process.argv.length === 3) {
 	const ok = await openViewer((message, level) => level === "info" ? console.log(message) : console.error(message));
 	process.exit(ok ? 0 : 1);
 }
+if (process.argv[2] === "setup") {
+	try {
+		if (process.argv.length !== 4) throw new Error("Expected exactly one source: codex or claude");
+		const source = process.argv[3];
+		const result = setupAgent(source);
+		console.log(`agenttel: ${source} setup ${result.changed ? "complete" : "already configured"}\nHooks: ${result.file}\nSkill: ${result.destinations.join(", ")}\nLogs: ${FILE}`);
+		if (result.backup) console.log(`Backup: ${result.backup}`);
+		console.log(source === "codex" ? "Restart Codex, review/trust Hooks when asked, then send a prompt and use $agenttel." : "Restart Claude Code, then send a prompt and use /agenttel.");
+	} catch (error) {
+		console.error(`agenttel: ${error.message}`);
+		process.exit(1);
+	}
+	process.exit(0);
+}
 if (process.argv[2] === "install-skill" && process.argv.length === 3) {
 	try {
-		const skill = realpathSync(fileURLToPath(new globalThis.URL("./skills/agenttel", import.meta.url)));
-		const destinations = [".agents", ".claude"].map(root => join(homedir(), root, "skills", "agenttel"));
-		// Check all destinations first; never overwrite an existing skill or a broken link.
-		for (const dest of destinations) {
-			const stat = lstatSync(dest, { throwIfNoEntry: false });
-			if (stat && (!stat.isSymbolicLink() || realpathSync(dest) !== skill)) throw new Error(`Skill already exists: ${dest}`);
-		}
-		for (const dest of destinations) if (!existsSync(dest)) {
-			mkdirSync(dirname(dest), { recursive: true });
-			symlinkSync(skill, dest, "junction");
-		}
+		installSkill();
 		console.log("agenttel: skill registered. Restart Codex or Claude Code, then use $agenttel or /agenttel. Recording Hooks are configured separately.");
 	} catch (error) {
 		console.error(`agenttel: ${error.message}`);

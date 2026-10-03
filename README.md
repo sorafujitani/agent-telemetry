@@ -1,111 +1,159 @@
 # agenttel
 
-Local telemetry and a live trace viewer for [Pi](https://pi.dev), Codex, and Claude Code.
-View runs, turns, tool calls, nested calls, token usage, costs, errors, and timing in your browser. No external telemetry service or runtime dependencies are required.
+Record local traces from Codex, Claude Code, or Pi and inspect them in your browser. See prompts, tool calls, results, errors, and timing without an external telemetry service.
 
-## Install
+**Not yet published to npm.** `npm install -g agenttel` is not available; install from a checkout as shown below.
 
-Requires Node.js 22 or later. Pi recording needs a Pi installation; Codex and Claude Code recording needs a version that supports the configured Hooks (scripts run at agent lifecycle events).
+## Before you start
 
-After the package is published to npm:
+- Requires **Node.js 22 or later** and an installed agent you can already send prompts to. Codex and Claude Code do not require Pi.
+- Use a current agent version. Codex and Claude Code recording uses **Hooks**: scripts the agent runs at lifecycle events. Pi recording uses an extension.
+- Setup needs permission to change your agent's local settings and register its viewer skill. Existing unrelated settings are preserved.
+- Logs contain prompts and tool payloads **without secret redaction**. Recording is enabled only after configuring the chosen agent. Read [Privacy and limits](#privacy-and-limits) before enabling it.
+- The viewer is localhost-only but unauthenticated; other local processes can access it.
+
+| Agent | Recording detail | Tokens and costs | Open from the agent |
+| --- | --- | --- | --- |
+| Codex | Responses and supported tool calls | Unavailable | `$agenttel` skill |
+| Claude Code | Responses and tool calls | Unavailable | `/agenttel` skill |
+| Pi | Model turns and tool calls | When reported | `/agenttel` command |
+
+Unavailable values appear as `–`, not zero. Codex may omit tool terminal status; `?` means unknown, not success.
+
+## Quick start
+
+### 1. Install the CLI
+
+From an existing checkout, run `npm install -g .`. For a new checkout, Git is also required:
 
 ```sh
-npm install -g agenttel
-# Only for Pi:
-pi install npm:agenttel
-```
-
-The npm install provides the `agenttel` CLI. The Pi install enables event recording and the `/agenttel` command. Restart Pi after installing. For Codex and Claude Code, configure Hooks as shown below. Installing the CLI alone does not enable recording.
-
-Before an npm release, install from a local checkout:
-
-```sh
+git clone https://github.com/sorafujitani/agent-telemetry.git
+cd agent-telemetry
 npm install -g .
-# Only for Pi:
-pi install /absolute/path/to/agent-telemetry
+agenttel --help
 ```
 
-If you already have the standalone extension in `~/.pi/agent/extensions/agenttel`, move it outside the extensions directory before enabling this package to avoid duplicate event recording. Existing logs remain compatible.
+The CLI works independently of any agent. Installing it alone does not start recording. To view existing logs without enabling recording, skip agent setup and run `agenttel open`.
 
-## Codex and Claude Code
+### 2. Set up the agent you use
 
-Register the bundled skill so it appears in the agent's command picker:
+Choose one of the following. You do not need to install or configure the other agents.
+
+#### Codex
 
 ```sh
-agenttel install-skill
+agenttel setup codex
 ```
 
-Restart Codex to select **`$agenttel`**, or restart Claude Code to use **`/agenttel`**. The installer links the packaged skill into `~/.agents/skills/agenttel` and `~/.claude/skills/agenttel` without overwriting existing skills. The skill opens the viewer; it does not enable recording.
+This merges recording Hooks into `~/.codex/hooks.json` and registers the viewer skill in `~/.agents/skills/agenttel`. Restart Codex and review/trust the Hooks when asked. Use **`$agenttel`** to open the viewer.
 
-To enable recording, print command-hook configuration for your agent:
+#### Claude Code
 
 ```sh
-agenttel hooks codex
-agenttel hooks claude
+agenttel setup claude
 ```
 
-- **Codex:** merge the printed `hooks` entries into `~/.codex/hooks.json` (or the project's `.codex/hooks.json`). Review and trust the Hooks when Codex asks.
-- **Claude Code:** merge the printed `hooks` entries into `~/.claude/settings.json` (or the project's `.claude/settings.json`).
+This merges recording Hooks into `~/.claude/settings.json` and registers the viewer skill in `~/.claude/skills/agenttel`. Restart Claude Code. Use **`/agenttel`** to open the viewer.
 
-Keep existing settings and append entries to any existing event arrays; do not overwrite other Hooks. The generated commands use absolute paths to Node.js and the installed package. Regenerate them if either installation moves. Hook commands are synchronous so recording order follows the agent lifecycle.
+Both setup commands preserve other settings and Hooks and can be repeated without adding duplicate collector commands. They configure only the selected agent. Do not edit settings concurrently with setup. If user Hooks are disabled by agent policy, resolve that before recording.
 
-Restart the agent after changing its configuration, then open the viewer:
+#### Pi
+
+From the checkout installed in step 1:
 
 ```sh
-agenttel open
+pi install "$PWD"
 ```
 
-This starts the viewer in the background if needed and opens your browser. The `$agenttel` and `/agenttel` skills run the same command.
+Restart Pi. The extension records events and provides **`/agenttel`**. No Codex or Claude Code skill registration is needed.
 
-Open `http://127.0.0.1:7777` to view all three agents together. Sessions show their source, and Codex and Claude Code session IDs are namespaced to prevent collisions. Separate subagent IDs, when supplied by the agent, create separate timelines. The CLI also accepts one Hook JSON object on stdin with `agenttel hook codex` or `agenttel hook claude`; successful and failed recording both return a neutral `{}` response without blocking the agent.
+If the old standalone extension exists in `~/.pi/agent/extensions/agenttel`, move it outside the extensions directory before enabling this package to avoid duplicate recording. Stop its old viewer if it still occupies the viewer port. Keep the log directory; existing logs remain compatible.
 
-### Recording limits
+### 3. Verify recording
 
-Hooks record prompts, tool arguments and results, compact events, and response completion or interruption. Durations are derived from Hook timestamps, which include command startup overhead. One **response** covers the full prompt-to-completion cycle, not each individual model call as Pi's **turns** do.
+1. Restart the configured agent and submit a new prompt that uses a tool.
+2. Open the viewer with the agent command above, or from a terminal:
 
-Hooks do not provide consistent token usage, costs, thinking, context size, or individual model-call timing. These values display as `–`; transcript import is not implemented. Codex may also omit tool terminal status; the viewer displays `?` instead of assuming success. Hosted Codex tools such as WebSearch do not emit tool Hooks, and nested parent-call relationships are shown only when recorded. Tool durations are summed and can exceed elapsed response time when calls overlap.
+   ```sh
+   agenttel open
+   ```
 
-Official Hook references:
+3. Open the printed URL, normally `http://127.0.0.1:7777`. Select the new session and confirm its agent label, prompt, and tool events.
+
+`agenttel open` starts the viewer in the background if needed and opens your browser. If browser launching is unavailable, open the printed URL yourself. The viewer remains running after the agent exits.
+
+Opening the viewer alone does not prove recording works: the CLI and skill can open it without enabling Hooks or the Pi extension. Follow [Troubleshooting](#troubleshooting) if the new session does not appear.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `agenttel setup codex` | Install Codex recording Hooks and viewer skill |
+| `agenttel setup claude` | Install Claude Code recording Hooks and viewer skill |
+| `agenttel open` | Start the background viewer and open the browser |
+| `agenttel` | Run the viewer in the foreground; Ctrl+C stops it |
+| `agenttel install-skill` | Register both viewer skills without enabling recording |
+| `agenttel hooks <source>` | Print recording Hook configuration for manual review |
+| `agenttel hook <source>` | Record one Hook JSON object from stdin |
+
+For the last two commands, `<source>` is `codex` or `claude`.
+
+### Manual or project-scoped setup
+
+Use `agenttel hooks codex` or `agenttel hooks claude` to inspect the generated configuration. Append the printed entries to the existing event arrays; do not replace unrelated Hooks or settings.
+
+- Codex project Hooks use `.codex/hooks.json`; Claude Code project Hooks use `.claude/settings.json`.
+- Configure each collector in only one scope. User, project, plugin, and Codex inline Hooks can all run; duplicate installations produce duplicate events.
+- To register only the viewer commands, use `agenttel install-skill`. Skills open the viewer; they do not record events.
+- Generated Hook commands and skill links refer to the installed package. If Node.js or the package moves, review/remove the old agenttel commands and stale links before setting it up again. Setup does not overwrite a different skill or guess how to migrate custom commands.
+
+Official references:
 - https://developers.openai.com/codex/hooks
+- https://developers.openai.com/codex/skills
 - https://code.claude.com/docs/en/hooks
+- https://code.claude.com/docs/en/skills
 
-## Use
+## Log location and configuration
 
-Run `/agenttel` in Pi to start the viewer and open your browser. On systems without a browser launcher, open the URL shown by the command.
-
-You can also run the server directly:
-
-```sh
-agenttel
-```
-
-Open `http://127.0.0.1:7777`. Select a session to inspect its timeline, tool arguments and results, or execution summary. The **clear** button permanently deletes all recorded events after confirmation.
-
-The CLI stays in the foreground; press Ctrl+C to stop it. A viewer started by `/agenttel` runs in the background and remains available after Pi exits.
-
-## Configuration
-
-New installations store logs at `~/.local/share/agenttel/events.jsonl`. If `~/.pi/agent/agenttel` already exists, it is reused automatically to preserve Pi history. `AGENTTEL_DIR` overrides both locations. Set the same environment variables for the agents and the CLI when overriding these defaults.
+New installations use `~/.local/share/agenttel/events.jsonl`. If `~/.pi/agent/agenttel` already exists, it is reused to preserve history; this is compatibility behavior, not a Pi requirement. `AGENTTEL_DIR` overrides either location.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `AGENTTEL_DIR` | Directory containing `events.jsonl` | `~/.local/share/agenttel`; existing Pi directory reused |
+| `AGENTTEL_DIR` | Directory containing `events.jsonl` | `~/.local/share/agenttel` |
 | `AGENTTEL_PORT` | Loopback port, from 1 to 65535 | `7777` |
 | `PI_TRACE_PORT` | Legacy port alias | Used if `AGENTTEL_PORT` is unset |
 
+When overriding these values, set the same environment variables for the agent and the CLI. A one-off variable set during setup is not automatically added to future agent processes.
+
 ```sh
-AGENTTEL_DIR="$HOME/my-traces" AGENTTEL_PORT=7788 agenttel
+export AGENTTEL_DIR="$HOME/my-traces"
+export AGENTTEL_PORT=7788
+agenttel open
 ```
 
-Run `agenttel --help` for CLI usage.
+Launch the agent from the same environment. Hook setup prints the settings, skill, and log paths so you can check which installation is configured.
+
+## Troubleshooting
+
+- **`npm install -g agenttel` returns 404:** the npm package is not published. Install from a checkout with `npm install -g .`.
+- **`agenttel` is not found:** check that your Node.js installation's global npm bin directory is on `PATH` and reopen the terminal.
+- **`$agenttel` or `/agenttel` is missing:** run the relevant setup command and restart the agent. A conflicting existing skill is preserved; review it before removing or relinking it.
+- **The viewer opens but no new traces appear:** restart the agent, check its Hook configuration and trust/policy settings, and confirm the agent and viewer use the same log directory. Claude Code's `disableAllHooks` setting and managed policies can prevent recording.
+- **Setup refuses existing settings:** invalid JSON, unexpected Hook structures, old collector paths, and skill conflicts are not overwritten. Fix or review the reported item, then retry.
+- **Setup reports a lock:** another setup may be running. Check it before removing a stale `<settings-file>.agenttel.lock` left by an interrupted process.
+- **The port is busy or an old viewer is shown:** stop only the conflicting viewer process, or choose another `AGENTTEL_PORT` for both the agent and CLI. Do not clear logs to fix a port conflict.
+- **Codex tokens, costs, or status show `–`/`?`:** those fields were not supplied by Hooks; this is not a failed recording.
 
 ## Privacy and limits
 
-- Recording starts when the Pi extension or agent Hooks are enabled. Logs contain prompt excerpts, assistant text and thinking excerpts, tool arguments and results, session IDs, and working directories. Secrets are not redacted; do not share logs without reviewing them.
-- Logs stay on your machine. The server binds only to `127.0.0.1` and rejects other hosts and cross-origin browser requests. Other local processes can access the viewer; it is not an authenticated service.
-- Newly created log directories and files use owner-only permissions on systems that support POSIX modes. Existing permissions are not changed.
-- Incoming Hook payloads over 8 MiB are skipped with a warning. Argument and result strings are capped at 32,000 characters each. Prompt excerpts are capped at 400 characters; assistant text and thinking excerpts at 2,000 characters each.
-- The viewer replays only the latest 50 MiB. Older events remain in the file. Logs are not automatically rotated.
+- Logs stay on your machine. They contain prompt excerpts, assistant text, available thinking excerpts, tool arguments/results, session IDs, and working directories. Review logs before sharing them; secrets are not redacted.
+- The server binds only to `127.0.0.1`, rejects other hosts and cross-origin browser requests, and has no authentication. Other local processes can access it.
+- Newly created log directories and files use owner-only permissions where POSIX modes are supported. Existing log permissions are not changed. New settings files use owner-only POSIX modes where supported; rewrites preserve existing settings-file permissions.
+- The **clear** button permanently deletes recorded events after confirmation. It does not disable recording.
+- Argument strings are capped at 32,000 characters each; results at 32,000 characters. Prompts are capped at 400 characters, and assistant text/thinking excerpts at 2,000. Hook payloads over 8 MiB are skipped with a warning.
+- The viewer replays only the latest 50 MiB. Older events remain in the file; logs are not automatically rotated.
+- Hook durations include command startup overhead. One response covers a full prompt-to-completion cycle, not an individual model call. Tool durations are summed and can exceed elapsed response time when calls overlap.
+- Hooks do not consistently provide usage, cost, thinking, context size, model-call timing, or nested parent-call relationships. Transcript import is not implemented. Hosted Codex tools such as WebSearch do not emit tool Hooks. Separate subagent IDs create separate timelines only when supplied by the agent.
 
 ## Development and release
 
@@ -115,9 +163,9 @@ pnpm test
 pnpm pack
 ```
 
-The extension and CLI use plain JavaScript, so no build step is required. The package allowlist includes only the extension, shared recorder, Hook adapter, configuration, server, viewer, favicon, bundled skill, npm metadata, README, and license; local logs and tests are excluded. Development dependencies and the lockfile are managed with pnpm. Packing and publishing run the tests through `prepack`.
+Runtime code is plain JavaScript with no build step or runtime dependencies. Tests pack and install the distributable and exercise recording, safe setup, the viewer, and skill registration. Packing and publishing run tests through `prepack`; logs and tests are excluded from the package.
 
-When ready to release, an npm maintainer can run:
+npm publication is a separate maintainer action; installation and setup do not publish anything. When ready:
 
 ```sh
 pnpm publish --access public

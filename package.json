@@ -17,7 +17,7 @@
   "engines": { "node": ">=22" },
   "bin": { "agenttel": "./server.js" },
   "exports": { ".": "./index.js" },
-  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/agenttel"],
+  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "setup.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/agenttel"],
   "pi": { "extensions": ["./index.js"] },
   "scripts": {
     "test": "node --test",
