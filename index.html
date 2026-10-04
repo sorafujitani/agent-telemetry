@@ -224,10 +224,13 @@ function flags(run) {
 const pct = s => s.ctx != null && s.win ? Math.min(100, Math.round(100*s.ctx/s.win)) : null;
 const ctxBar = s => pct(s) == null ? "" : `<div class="bar"><i class="${pct(s)>80?"err":pct(s)>60?"warn":""}" style="width:${pct(s)}%"></i></div>`;
 
+// Sessions whose prompt fired before recording was enabled have no runs to show.
+const listed = () => [...sessions.values()].filter(s => s.runs.length).sort((a,b) => b.last - a.last);
+
 function renderSide() {
   dirtySide = false;
   const q = sq.value.toLowerCase();
-  const list = [...sessions.values()].sort((a,b) => b.last - a.last).filter(s => !q || (s.source + " " + s.cwd + " " + s.title + " " + s.model).toLowerCase().includes(q));
+  const list = listed().filter(s => !q || (s.source + " " + s.cwd + " " + s.title + " " + s.model).toLowerCase().includes(q));
   const top = side.scrollTop;
   setHTML(side, list.map(s => `<div class="s ${s.sid===selected?"on":""}" data-sid="${esc(s.sid)}">
     <div>${s.busy ? '<span class="live">●</span>' : '<span class="dim">○</span>'} ${esc(base(s.cwd))} <span class="dim">${esc(s.source)}${s.pid != null ? " #" + esc(s.pid) : ""}</span></div>
@@ -429,7 +432,7 @@ setInterval(() => { if (!ready) return; if (dirtySide) renderSide(); const s = s
 
 const es = new EventSource("/events");
 es.onmessage = e => { try { ingest(JSON.parse(e.data)); } catch {} };
-es.addEventListener("ready", () => { ready = true; const first = [...sessions.values()].sort((a,b)=>b.last-a.last)[0]; if (first) selectSession(first.sid); else renderSide(); });
+es.addEventListener("ready", () => { ready = true; const first = listed()[0]; if (first) selectSession(first.sid); else renderSide(); });
 es.addEventListener("clear", () => { sessions.clear(); selected = null; sel = null; open.clear(); bodyKey = ""; setHTML(stats, '<p class="dim">cleared</p>'); setHTML(body, ""); renderDetail(); renderSide(); });
 </script>
 </body>
