@@ -282,6 +282,10 @@ test("viewer derives hook durations, isolates sessions, and keeps unavailable va
 	viewer.ingest({ ...base, sid: "claude:shared", source: "claude", type: "session_end", t: 2500 });
 	assert.equal(viewer.sessions.get("claude:shared").runs[0].ms, 500);
 	assert.equal(viewer.sessions.get("claude:shared").busy, false);
+	for (const type of ["turn_end", "run_end"]) viewer.ingest({ ...base, sid: "claude:shared:agent:early", source: "claude", type, t: 2600 });
+	viewer.renderSide();
+	assert.match(side.html, /claude:shared"/);
+	assert.doesNotMatch(side.html, /agent:early/);
 	// Old Pi logs have no source field, retain explicit timing, and keep measured zero costs.
 	for (const e of [{ type: "run_start", t: 0 }, { type: "turn_start", t: 0, turn: 0 }, { type: "turn_end", t: 50, ms: 40, usage: { input: 1, output: 2, cacheRead: 0, cost: { total: 0 } } }, { type: "run_end", t: 60, ms: 45 }]) viewer.ingest({ sid: "shared", ...e });
 	const pi = viewer.sessions.get("shared");
@@ -291,7 +295,7 @@ test("viewer derives hook durations, isolates sessions, and keeps unavailable va
 	assert.equal(pi.cost, 0);
 	assert.equal(viewer.sumKnown([1, null]), null);
 	assert.equal(viewer.sumKnown([0, 0]), 0);
-	assert.equal(viewer.sessions.size, 3);
+	assert.equal(viewer.sessions.size, 4);
 });
 
 test("bundled skill registration is idempotent and preserves existing skills", () => {
