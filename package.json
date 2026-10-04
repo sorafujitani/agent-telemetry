@@ -1,5 +1,5 @@
 {
-  "name": "agenttel",
+  "name": "panopticon",
   "version": "0.1.0",
   "description": "Local telemetry and live trace viewer for Pi, Codex, and Claude Code",
   "type": "module",
@@ -7,17 +7,17 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sorafujitani/agent-telemetry.git"
+    "url": "git+https://github.com/sorafujitani/panopticon.git"
   },
   "bugs": {
-    "url": "https://github.com/sorafujitani/agent-telemetry/issues"
+    "url": "https://github.com/sorafujitani/panopticon/issues"
   },
-  "homepage": "https://github.com/sorafujitani/agent-telemetry#readme",
-  "keywords": ["pi-package", "pi", "codex", "claude-code", "telemetry", "agenttel"],
+  "homepage": "https://github.com/sorafujitani/panopticon#readme",
+  "keywords": ["pi-package", "pi", "codex", "claude-code", "telemetry", "panopticon"],
   "engines": { "node": ">=22" },
-  "bin": { "agenttel": "./server.js" },
+  "bin": { "panopticon": "./server.js" },
   "exports": { ".": "./index.js" },
-  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "setup.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/agenttel"],
+  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "setup.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/panopticon"],
   "pi": { "extensions": ["./index.js"] },
   "scripts": {
     "test": "node --test",

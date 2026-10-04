@@ -9,25 +9,24 @@ import { DIR, FILE, PORT, URL } from "./config.js";
 import { hookConfig, recordHook, checkSource } from "./hooks.js";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-	console.log(`Usage: agenttel
-       agenttel setup <codex|claude>
-       agenttel open
-       agenttel install-skill
-       agenttel hooks <codex|claude>
-       agenttel hook <codex|claude>
+	console.log(`Usage: panopticon
+       panopticon setup <codex|claude>
+       panopticon open
+       panopticon install-skill
+       panopticon hooks <codex|claude>
+       panopticon hook <codex|claude>
 
 Start the local telemetry viewer. Press Ctrl+C to stop.
 "setup" merges recording Hooks and registers the selected agent\'s viewer skill.
 Existing unrelated settings are preserved; changed settings are backed up.
 "open" starts it in the background and opens the browser.
-"install-skill" registers $agenttel in Codex and /agenttel in Claude Code.
+"install-skill" registers $panopticon in Codex and /panopticon in Claude Code.
 "hooks" prints configuration to merge into your agent settings.
 "hook" records one JSON hook payload from stdin without blocking the agent.
 
 Environment:
-  AGENTTEL_DIR   Log directory (default: ~/.local/share/agenttel; existing Pi directory reused)
-  AGENTTEL_PORT  Viewer port (default: 7777)
-  PI_TRACE_PORT Legacy alias for AGENTTEL_PORT
+  PANOPTICON_DIR   Log directory (default: ~/.local/share/panopticon; existing Pi directory reused)
+  PANOPTICON_PORT  Viewer port (default: 7777)
 
 Logs are local and may contain sensitive prompts, tool arguments, and results.`);
 	process.exit(0);
@@ -41,11 +40,11 @@ if (process.argv[2] === "setup") {
 		if (process.argv.length !== 4) throw new Error("Expected exactly one source: codex or claude");
 		const source = process.argv[3];
 		const result = setupAgent(source);
-		console.log(`agenttel: ${source} setup ${result.changed ? "complete" : "already configured"}\nHooks: ${result.file}\nSkill: ${result.destinations.join(", ")}\nLogs: ${FILE}`);
+		console.log(`panopticon: ${source} setup ${result.changed ? "complete" : "already configured"}\nHooks: ${result.file}\nSkill: ${result.destinations.join(", ")}\nLogs: ${FILE}`);
 		if (result.backup) console.log(`Backup: ${result.backup}`);
-		console.log(source === "codex" ? "Restart Codex, review/trust Hooks when asked, then send a prompt and use $agenttel." : "Restart Claude Code, then send a prompt and use /agenttel.");
+		console.log(source === "codex" ? "Restart Codex, review/trust Hooks when asked, then send a prompt and use $panopticon." : "Restart Claude Code, then send a prompt and use /panopticon.");
 	} catch (error) {
-		console.error(`agenttel: ${error.message}`);
+		console.error(`panopticon: ${error.message}`);
 		process.exit(1);
 	}
 	process.exit(0);
@@ -53,9 +52,9 @@ if (process.argv[2] === "setup") {
 if (process.argv[2] === "install-skill" && process.argv.length === 3) {
 	try {
 		installSkill();
-		console.log("agenttel: skill registered. Restart Codex or Claude Code, then use $agenttel or /agenttel. Recording Hooks are configured separately.");
+		console.log("panopticon: skill registered. Restart Codex or Claude Code, then use $panopticon or /panopticon. Recording Hooks are configured separately.");
 	} catch (error) {
-		console.error(`agenttel: ${error.message}`);
+		console.error(`panopticon: ${error.message}`);
 		process.exit(1);
 	}
 	process.exit(0);
@@ -65,7 +64,7 @@ if (process.argv[2] === "hooks" || process.argv[2] === "hook") {
 		if (process.argv.length !== 4) throw new Error("Expected exactly one source: codex or claude");
 		checkSource(process.argv[3]);
 	} catch (error) {
-		console.error(`agenttel: ${error.message}`);
+		console.error(`panopticon: ${error.message}`);
 		process.exit(1);
 	}
 	if (process.argv[2] === "hooks") console.log(JSON.stringify(hookConfig(process.argv[3]), null, 2));
@@ -73,12 +72,12 @@ if (process.argv[2] === "hooks" || process.argv[2] === "hook") {
 	process.exit(0);
 }
 if (process.argv.length > 2) {
-	console.error("Unknown argument. Run agenttel --help for usage.");
+	console.error("Unknown argument. Run panopticon --help for usage.");
 	process.exit(1);
 }
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
-	console.error("AGENTTEL_PORT must be an integer between 1 and 65535");
+	console.error("PANOPTICON_PORT must be an integer between 1 and 65535");
 	process.exit(1);
 }
 
@@ -134,7 +133,7 @@ const server = createServer((req, res) => {
 	res.setHeader("X-Content-Type-Options", "nosniff");
 	res.setHeader("Cache-Control", "no-store");
 	try {
-		if (req.url === "/ping" && req.method === "GET") return res.end("agenttel");
+		if (req.url === "/ping" && req.method === "GET") return res.end("panopticon");
 		if (req.url === "/clear" && req.method === "POST") {
 			if (existsSync(FILE)) truncateSync(FILE, 0);
 			offset = 0;
@@ -167,15 +166,15 @@ const server = createServer((req, res) => {
 		res.writeHead(404);
 		res.end("Not found");
 	} catch (error) {
-		console.error(`agenttel: ${error.message}`);
+		console.error(`panopticon: ${error.message}`);
 		if (!res.headersSent) res.writeHead(500);
 		res.end("Unable to read telemetry");
 	}
 });
 server.on("error", (error) => {
-	console.error(`agenttel: ${error.message}`);
+	console.error(`panopticon: ${error.message}`);
 	process.exit(1);
 });
-server.listen(PORT, "127.0.0.1", () => console.log(`agenttel: ${URL}\nLogs: ${FILE}\nPress Ctrl+C to stop.`));
+server.listen(PORT, "127.0.0.1", () => console.log(`panopticon: ${URL}\nLogs: ${FILE}\nPress Ctrl+C to stop.`));
 watch(DIR, poll);
 setInterval(poll, 1000); // fs.watch is unreliable on some mounts

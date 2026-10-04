@@ -11,26 +11,31 @@ import { request } from "node:http";
 import { once } from "node:events";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const temp = mkdtempSync(join(tmpdir(), "agenttel-test-"));
+const temp = mkdtempSync(join(tmpdir(), "panopticon-test-"));
 after(() => rmSync(temp, { recursive: true, force: true }));
-process.env.AGENTTEL_DIR = join(temp, "recording");
-process.env.AGENTTEL_PORT = "7777";
+process.env.PANOPTICON_DIR = join(temp, "recording");
+process.env.PANOPTICON_PORT = "7777";
 
 // Pack and install the actual distributable, not a symlink to the checkout.
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const packed = JSON.parse(execFileSync(npm, ["pack", "--ignore-scripts", "--json", "--pack-destination", temp], { cwd: root, encoding: "utf8" }))[0];
 const prefix = join(temp, "consumer's copy");
 execFileSync(npm, ["install", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", join(temp, packed.filename)], { encoding: "utf8" });
-const installed = join(prefix, "node_modules", "agenttel");
+const installed = join(prefix, "node_modules", "panopticon");
 
 test("npm package contains all runtime assets and exposes the CLI and Pi extension", () => {
-	assert.deepEqual(packed.files.map((f) => f.path).sort(), ["LICENSE", "README.md", "config.js", "favicon.svg", "hooks.js", "index.html", "index.js", "package.json", "recorder.js", "server.js", "setup.js", "skills/agenttel/SKILL.md", "viewer.js"]);
+	assert.deepEqual(packed.files.map((f) => f.path).sort(), ["LICENSE", "README.md", "config.js", "favicon.svg", "hooks.js", "index.html", "index.js", "package.json", "recorder.js", "server.js", "setup.js", "skills/panopticon/SKILL.md", "viewer.js"]);
 	const pkg = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
+	assert.equal(pkg.name, "panopticon");
+	assert.equal(pkg.repository.url, "git+https://github.com/sorafujitani/panopticon.git");
+	assert.equal(pkg.bugs.url, "https://github.com/sorafujitani/panopticon/issues");
+	assert.equal(pkg.homepage, "https://github.com/sorafujitani/panopticon#readme");
+	assert.match(readFileSync(join(installed, "index.html"), "utf8"), /<title>panopticon<\/title>/);
 	assert.deepEqual(pkg.pi.extensions, ["./index.js"]);
-	assert.equal(pkg.bin.agenttel, "./server.js");
-	const cli = join(prefix, "node_modules", ".bin", process.platform === "win32" ? "agenttel.cmd" : "agenttel");
-	assert.match(execFileSync(cli, ["--help"], { encoding: "utf8" }), /Usage: agenttel/);
-	const invalid = spawn(process.execPath, [join(installed, "server.js")], { env: { ...process.env, AGENTTEL_PORT: "not-a-port" }, stdio: "ignore" });
+	assert.equal(pkg.bin.panopticon, "./server.js");
+	const cli = join(prefix, "node_modules", ".bin", process.platform === "win32" ? "panopticon.cmd" : "panopticon");
+	assert.match(execFileSync(cli, ["--help"], { encoding: "utf8" }), /Usage: panopticon/);
+	const invalid = spawn(process.execPath, [join(installed, "server.js")], { env: { ...process.env, PANOPTICON_PORT: "not-a-port" }, stdio: "ignore" });
 	return once(invalid, "exit").then(([code]) => assert.equal(code, 1));
 });
 
@@ -38,7 +43,7 @@ test("installed extension records lifecycle events, caps payloads, and preserves
 	const extension = (await import(pathToFileURL(join(installed, "index.js")))).default;
 	const handlers = new Map(), commands = new Map(), notices = [];
 	extension({ on: (name, fn) => handlers.set(name, fn), registerCommand: (name, command) => commands.set(name, command), getActiveTools: () => ["bash", "read"] });
-	assert.equal(typeof commands.get("agenttel").handler, "function");
+	assert.equal(typeof commands.get("panopticon").handler, "function");
 	const ctx = { cwd: "/example", sessionManager: { getSessionId: () => "session" }, model: { provider: "example", id: "model" }, getContextUsage: () => ({ tokens: 42, contextWindow: 100 }), ui: { notify: (...args) => notices.push(args) } };
 	const emit = (name, data) => handlers.get(name)(data, ctx);
 	emit("before_agent_start", { prompt: "hello", systemPrompt: "system" });
@@ -51,7 +56,7 @@ test("installed extension records lifecycle events, caps payloads, and preserves
 	emit("agent_end", {});
 	emit("session_compact", { reason: "manual" });
 	emit("model_select", { model: { provider: "example", id: "new" }, previousModel: { id: "model" } });
-	const file = join(process.env.AGENTTEL_DIR, "events.jsonl");
+	const file = join(process.env.PANOPTICON_DIR, "events.jsonl");
 	const events = readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
 	assert.deepEqual(events.map((e) => e.type), ["run_start", "turn_start", "tool_start", "tool_start", "tool_end", "tool_end", "turn_end", "run_end", "compact", "model_select"]);
 	assert.equal(events[0].sid, "session");
@@ -70,8 +75,8 @@ test("installed extension records lifecycle events, caps payloads, and preserves
 	assert.deepEqual(notices, []);
 
 	// A recording failure must warn once without stopping the agent.
-	rmSync(process.env.AGENTTEL_DIR, { recursive: true });
-	writeFileSync(process.env.AGENTTEL_DIR, "not a directory");
+	rmSync(process.env.PANOPTICON_DIR, { recursive: true });
+	writeFileSync(process.env.PANOPTICON_DIR, "not a directory");
 	emit("agent_end", {});
 	emit("agent_end", {});
 	assert.equal(notices.length, 1);
@@ -87,12 +92,12 @@ test("installed viewer replays and streams complete UTF-8 events and protects lo
 	mkdirSync(dir);
 	const file = join(dir, "events.jsonl");
 	writeFileSync(file, '{"sid":"first","type":"run_start"}\n{"text":"');
-	const child = spawn(process.execPath, [join(installed, "server.js")], { env: { ...process.env, AGENTTEL_DIR: dir, AGENTTEL_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(process.execPath, [join(installed, "server.js")], { env: { ...process.env, PANOPTICON_DIR: dir, PANOPTICON_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
 	const exited = once(child, "exit");
 	t.after(async () => { if (child.exitCode === null) child.kill(); await exited; });
 	await Promise.race([once(child.stdout, "data"), exited.then(() => { throw new Error("Viewer exited before startup"); })]);
 	const url = `http://127.0.0.1:${port}`;
-	assert.equal(await (await fetch(`${url}/ping`)).text(), "agenttel");
+	assert.equal(await (await fetch(`${url}/ping`)).text(), "panopticon");
 	const page = await fetch(url);
 	const html = await page.text();
 	assert.match(html, /<html lang="en">/);
@@ -107,8 +112,8 @@ test("installed viewer replays and streams complete UTF-8 events and protects lo
 	if (process.platform !== "win32") {
 		const bin = join(temp, "fake-browser"), opened = join(temp, "opened-url");
 		mkdirSync(bin);
-		writeFileSync(join(bin, process.platform === "darwin" ? "open" : "xdg-open"), '#!/bin/sh\nprintf "%s" "$1" > "$AGENTTEL_TEST_BROWSER"\n', { mode: 0o700 });
-		const output = execFileSync(process.execPath, [join(installed, "server.js"), "open"], { env: { ...process.env, AGENTTEL_PORT: String(port), AGENTTEL_DIR: dir, PATH: `${bin}:${process.env.PATH}`, AGENTTEL_TEST_BROWSER: opened }, encoding: "utf8", timeout: 5000 });
+		writeFileSync(join(bin, process.platform === "darwin" ? "open" : "xdg-open"), '#!/bin/sh\nprintf "%s" "$1" > "$PANOPTICON_TEST_BROWSER"\n', { mode: 0o700 });
+		const output = execFileSync(process.execPath, [join(installed, "server.js"), "open"], { env: { ...process.env, PANOPTICON_PORT: String(port), PANOPTICON_DIR: dir, PATH: `${bin}:${process.env.PATH}`, PANOPTICON_TEST_BROWSER: opened }, encoding: "utf8", timeout: 5000 });
 		assert.match(output, new RegExp(url));
 		for (let i = 0; i < 100 && !existsSync(opened); i++) await new Promise(resolve => setTimeout(resolve, 10));
 		assert.equal(readFileSync(opened, "utf8"), url);
@@ -155,7 +160,7 @@ test("installed viewer replays and streams complete UTF-8 events and protects lo
 
 test("installed command hooks record both agents, cap valid JSON, and leave agent decisions unchanged", { timeout: 15000 }, async () => {
 	const dir = join(temp, "hooks");
-	const env = { ...process.env, AGENTTEL_DIR: dir, AGENTTEL_PORT: "not-a-port" };
+	const env = { ...process.env, PANOPTICON_DIR: dir, PANOPTICON_PORT: "not-a-port" };
 	const cli = join(installed, "server.js");
 	const record = (source, input) => {
 		const result = spawnSync(process.execPath, [cli, "hook", source], { env, input: JSON.stringify(input), encoding: "utf8", timeout: 3000 });
@@ -229,7 +234,7 @@ test("hook input and storage failures are non-blocking and invalid CLI sources f
 	const dir = join(temp, "broken-hooks");
 	writeFileSync(dir, "not a directory");
 	for (const input of ["not JSON", "[]", '{}', JSON.stringify({ session_id: "s", hook_event_name: "UserPromptSubmit", prompt: "hello" })]) {
-		const result = spawnSync(process.execPath, [cli, "hook", "claude"], { env: { ...process.env, AGENTTEL_DIR: dir }, input, encoding: "utf8", timeout: 3000 });
+		const result = spawnSync(process.execPath, [cli, "hook", "claude"], { env: { ...process.env, PANOPTICON_DIR: dir }, input, encoding: "utf8", timeout: 3000 });
 		assert.equal(result.status, 0);
 		assert.deepEqual(JSON.parse(result.stdout), {});
 		assert.match(result.stderr, /unable to record hook/);
@@ -294,34 +299,79 @@ test("viewer derives hook durations, isolates sessions, and keeps unavailable va
 	assert.equal(viewer.sessions.size, 3);
 });
 
+test("tool selection highlights the same parallel calls in the timeline and detail without replacing rows", () => {
+	const script = readFileSync(join(installed, "index.html"), "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
+	const element = (id, classes, parentElement) => {
+		const names = new Set(classes);
+		return { dataset: { id }, parentElement, classList: { contains: name => names.has(name), add: name => names.add(name), remove: name => names.delete(name), toggle: (name, on) => on ? names.add(name) : names.delete(name) } };
+	};
+	const chart = element(null, ["gantt"]), ids = ["parent", "long", "short", "late"];
+	const rows = ids.map(id => element(id, ["tool"])), bars = ids.map(id => element(id, [], chart));
+	const body = { scrollTop: 0, querySelectorAll: selector => selector === ".gantt" ? [chart] : [...rows, ...bars], replaceChildren: () => { throw new Error("Selection replaced timeline rows"); } };
+	const detail = { replaceChildren: html => { detail.html = html; } };
+	const interaction = script.slice(script.indexOf("function keepAnchored"), script.indexOf("side.onclick"));
+	const viewer = runInNewContext(`${script.split("// ---- interaction:")[0]}\n${interaction}\n({ ingest, sessions, selectTool, gantt, renderRun, renderExec, isPeer, choose: sid => { selected = sid; } })`, { body, detail, mainEl: element(null, []), document: { createRange: () => ({ createContextualFragment: html => html }) } });
+	const emit = (type, t, extra = {}) => viewer.ingest({ sid: "parallel", cwd: "/demo", type, t, ...extra });
+	emit("run_start", 0); emit("turn_start", 0, { turn: 0 });
+	emit("tool_start", 100, { id: "parent", tool: "codemode", args: "{}" });
+	emit("tool_start", 200, { id: "long", parent: "parent", tool: "edit", args: "{}" });
+	emit("tool_start", 250, { id: "short", parent: "parent", tool: "read", args: "{}" });
+	emit("tool_end", 280, { id: "short", ms: 30 }); emit("tool_end", 500, { id: "long", ms: 300 });
+	emit("tool_start", 500, { id: "late", parent: "parent", tool: "read", args: "{}" });
+	emit("tool_end", 520, { id: "late", ms: 20 }); emit("tool_end", 600, { id: "parent", ms: 500 });
+	emit("turn_end", 700, { ms: 700 }); emit("run_end", 700, { ms: 700 });
+	viewer.choose("parallel"); viewer.selectTool("short");
+	const session = viewer.sessions.get("parallel"), turn = session.runs[0].turns[0];
+	assert.equal(rows[2].classList.contains("sel"), true);
+	assert.equal(bars[2].classList.contains("focus"), true);
+	assert.equal(rows[1].classList.contains("parallel"), true);
+	assert.equal(bars[1].classList.contains("parallel"), true);
+	assert.equal(chart.classList.contains("has-focus"), true);
+	assert.equal(rows[0].classList.contains("parallel"), false); // The parent contains its children; it is not a peer.
+	assert.equal(rows[3].classList.contains("parallel"), false);
+	assert.equal(viewer.isPeer(session.tools.get("long"), session.tools.get("late")), false); // Touching endpoints do not overlap.
+	assert.equal(viewer.isPeer(session.tools.get("short"), { ...session.tools.get("long"), turn: 1 }), false);
+	assert.equal(viewer.gantt(turn), viewer.gantt(turn, session.tools.get("short")));
+	assert.match(detail.html, /class="par"/); // Detail rendering must pass the turn, not Array.map's index.
+	assert.match(viewer.renderRun(session.runs[0]), /focus/);
+	assert.match(viewer.renderExec(session), /class="tool  parallel"/);
+	viewer.selectTool("long");
+	assert.equal(bars[1].classList.contains("focus"), true);
+	assert.equal(bars[2].classList.contains("focus"), false);
+	assert.equal(rows[2].classList.contains("parallel"), true);
+	viewer.selectTool("long");
+	assert.equal(chart.classList.contains("has-focus"), false);
+	assert.equal([...rows, ...bars].some(node => node.classList.contains("sel") || node.classList.contains("focus") || node.classList.contains("parallel")), false);
+});
+
 test("bundled skill registration is idempotent and preserves existing skills", () => {
 	const cli = join(installed, "server.js"), home = join(temp, "skill-home");
 	const env = { ...process.env, HOME: home, USERPROFILE: home };
-	const source = realpathSync(join(installed, "skills", "agenttel"));
-	assert.match(readFileSync(join(source, "SKILL.md"), "utf8"), /name: agenttel/);
-	assert.match(readFileSync(join(source, "SKILL.md"), "utf8"), /agenttel open/);
+	const source = realpathSync(join(installed, "skills", "panopticon"));
+	assert.match(readFileSync(join(source, "SKILL.md"), "utf8"), /name: panopticon/);
+	assert.match(readFileSync(join(source, "SKILL.md"), "utf8"), /panopticon open/);
 	for (let n = 0; n < 2; n++) {
 		const result = spawnSync(process.execPath, [cli, "install-skill"], { env, encoding: "utf8", timeout: 3000 });
 		assert.equal(result.status, 0, result.stderr);
 		assert.match(result.stdout, /skill registered/);
-		for (const root of [".agents", ".claude"]) assert.equal(realpathSync(join(home, root, "skills", "agenttel")), source);
+		for (const root of [".agents", ".claude"]) assert.equal(realpathSync(join(home, root, "skills", "panopticon")), source);
 	}
 	const conflictHome = join(temp, "skill-conflict");
-	const conflict = join(conflictHome, ".claude", "skills", "agenttel");
+	const conflict = join(conflictHome, ".claude", "skills", "panopticon");
 	mkdirSync(conflict, { recursive: true });
 	writeFileSync(join(conflict, "SKILL.md"), "existing skill");
 	const result = spawnSync(process.execPath, [cli, "install-skill"], { env: { ...env, HOME: conflictHome, USERPROFILE: conflictHome }, encoding: "utf8", timeout: 3000 });
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /Skill already exists/);
 	assert.equal(readFileSync(join(conflict, "SKILL.md"), "utf8"), "existing skill");
-	assert.equal(existsSync(join(conflictHome, ".agents", "skills", "agenttel")), false);
+	assert.equal(existsSync(join(conflictHome, ".agents", "skills", "panopticon")), false);
 });
 
 test("setup merges only the selected agent, backs up settings, and is idempotent", () => {
 	const cli = join(installed, "server.js");
 	for (const source of ["codex", "claude"]) {
 		const home = join(temp, `setup-${source}`), logs = join(home, "traces");
-		const env = { ...process.env, HOME: home, USERPROFILE: home, AGENTTEL_DIR: logs };
+		const env = { ...process.env, HOME: home, USERPROFILE: home, PANOPTICON_DIR: logs };
 		const file = join(home, source === "codex" ? ".codex" : ".claude", source === "codex" ? "hooks.json" : "settings.json");
 		mkdirSync(dirname(file), { recursive: true });
 		const generated = JSON.parse(execFileSync(process.execPath, [cli, "hooks", source], { env, encoding: "utf8" }));
@@ -351,9 +401,9 @@ test("setup merges only the selected agent, backs up settings, and is idempotent
 			assert.equal(config.hooks[event].flatMap(entry => entry.hooks).filter(handler => handler.command === command).length, 1);
 		}
 		const skillRoot = source === "codex" ? ".agents" : ".claude";
-		assert.equal(realpathSync(join(home, skillRoot, "skills", "agenttel")), realpathSync(join(installed, "skills", "agenttel")));
+		assert.equal(realpathSync(join(home, skillRoot, "skills", "panopticon")), realpathSync(join(installed, "skills", "panopticon")));
 		assert.equal(existsSync(join(home, source === "codex" ? ".claude" : ".codex")), false);
-		const backups = () => readdirSync(dirname(file)).filter(name => name.startsWith(`${file.split(/[\\/]/).at(-1)}.agenttel-backup-`));
+		const backups = () => readdirSync(dirname(file)).filter(name => name.startsWith(`${file.split(/[\\/]/).at(-1)}.panopticon-backup-`));
 		assert.equal(backups().length, 1);
 		const backup = join(dirname(file), backups()[0]);
 		assert.equal(readFileSync(backup, "utf8"), raw);
@@ -369,7 +419,7 @@ test("setup merges only the selected agent, backs up settings, and is idempotent
 		assert.equal(readFileSync(file, "utf8"), saved);
 		assert.equal(statSync(file).mtimeMs, mtime);
 		assert.equal(backups().length, 1);
-		assert.equal(existsSync(`${file}.agenttel.lock`), false);
+		assert.equal(existsSync(`${file}.panopticon.lock`), false);
 		const recorded = spawnSync(config.hooks.UserPromptSubmit.at(-1).hooks[0].command, { shell: true, env, input: JSON.stringify({ session_id: "setup-check", hook_event_name: "UserPromptSubmit", prompt: "hello" }), encoding: "utf8", timeout: 3000 });
 		assert.equal(recorded.status, 0, recorded.stderr);
 		assert.deepEqual(JSON.parse(recorded.stdout), {});
@@ -387,44 +437,44 @@ test("setup merges only the selected agent, backs up settings, and is idempotent
 
 test("setup refuses invalid, disabled, stale, or busy settings without changing them", () => {
 	const cli = join(installed, "server.js");
-	const cases = ["not JSON", "[]", '{"hooks":[]}', '{"hooks":{"Stop":null}}', '{"hooks":{"Stop":[{}]}}', '{"hooks":{"Stop":[{"hooks":[null]}]}}', '{"disableAllHooks":true}', JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "'node' '/old/agenttel/server.js' hook claude" }] }] } })];
+	const cases = ["not JSON", "[]", '{"hooks":[]}', '{"hooks":{"Stop":null}}', '{"hooks":{"Stop":[{}]}}', '{"hooks":{"Stop":[{"hooks":[null]}]}}', '{"disableAllHooks":true}', JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "'node' '/old/panopticon/server.js' hook claude" }] }] } }), ...["agenttel", "agent-telemetry"].map(name => JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: `\'node\' \'/old/${name}/server.js\' hook claude` }] }] } }))];
 	for (const [n, raw] of cases.entries()) {
 		const home = join(temp, `setup-invalid-${n}`), file = join(home, ".claude", "settings.json");
 		mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, raw);
 		const result = spawnSync(process.execPath, [cli, "setup", "claude"], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8", timeout: 3000 });
 		assert.equal(result.status, 1);
-		assert.match(result.stderr, /agenttel:/);
+		assert.match(result.stderr, /panopticon:/);
 		assert.equal(readFileSync(file, "utf8"), raw);
-		assert.equal(existsSync(join(home, ".claude", "skills", "agenttel")), false);
+		assert.equal(existsSync(join(home, ".claude", "skills", "panopticon")), false);
 		assert.deepEqual(readdirSync(dirname(file)), ["settings.json"]);
 	}
 	const home = join(temp, "setup-busy"), file = join(home, ".codex", "hooks.json");
-	mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "{}"); writeFileSync(`${file}.agenttel.lock`, "busy");
+	mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "{}"); writeFileSync(`${file}.panopticon.lock`, "busy");
 	const busy = spawnSync(process.execPath, [cli, "setup", "codex"], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8", timeout: 3000 });
 	assert.equal(busy.status, 1);
 	assert.match(busy.stderr, /Setup lock exists/);
 	assert.equal(readFileSync(file, "utf8"), "{}");
-	assert.equal(readFileSync(`${file}.agenttel.lock`, "utf8"), "busy");
-	assert.equal(existsSync(join(home, ".agents", "skills", "agenttel")), false);
+	assert.equal(readFileSync(`${file}.panopticon.lock`, "utf8"), "busy");
+	assert.equal(existsSync(join(home, ".agents", "skills", "panopticon")), false);
 });
 
 test("documented local npm installation works without pnpm or a published package", { skip: process.platform === "win32", timeout: 15000 }, () => {
 	const bin = join(temp, "no-pnpm"), prefix = join(temp, "global-install");
 	mkdirSync(bin); writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
 	execFileSync(npm, ["install", "--global", "--prefix", prefix, "--offline", "--no-audit", "--no-fund", root], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8", timeout: 10000 });
-	const help = execFileSync(join(prefix, "bin", "agenttel"), ["--help"], { encoding: "utf8", timeout: 3000 });
-	assert.match(help, /agenttel setup <codex\|claude>/);
+	const help = execFileSync(join(prefix, "bin", "panopticon"), ["--help"], { encoding: "utf8", timeout: 3000 });
+	assert.match(help, /panopticon setup <codex\|claude>/);
 });
 
 test("new installations use a shared directory and existing Pi directories are reused", { skip: process.platform === "win32" }, () => {
 	const home = join(temp, "home");
 	mkdirSync(home);
 	const env = { ...process.env, HOME: home };
-	delete env.AGENTTEL_DIR;
+	delete env.PANOPTICON_DIR;
 	const script = `import { DIR } from ${JSON.stringify(pathToFileURL(join(installed, "config.js")).href)}; console.log(DIR);`;
 	const dir = () => execFileSync(process.execPath, ["--input-type=module", "-e", script], { env, encoding: "utf8" }).trim();
-	assert.equal(dir(), join(home, ".local", "share", "agenttel"));
-	const legacy = join(home, ".pi", "agent", "agenttel");
+	assert.equal(dir(), join(home, ".local", "share", "panopticon"));
+	const legacy = join(home, ".pi", "agent", "panopticon");
 	mkdirSync(legacy, { recursive: true });
 	assert.equal(dir(), legacy);
 });

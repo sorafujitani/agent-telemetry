@@ -69,7 +69,7 @@ export async function recordHook(source) {
 		appendEvents(hookEvents(source, input));
 	} catch (error) {
 		// A recorder failure must never block tools or inject a continuation prompt.
-		console.error(`agenttel: unable to record hook: ${error.message}`);
+		console.error(`panopticon: unable to record hook: ${error.message}`);
 	}
 	console.log("{}");
 }

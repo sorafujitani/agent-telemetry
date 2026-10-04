@@ -1,4 +1,4 @@
-/** Record Pi lifecycle events locally; /agenttel opens the live viewer. */
+/** Record Pi lifecycle events locally; /panopticon opens the live viewer. */
 import { openViewer } from "./viewer.js";
 import { URL } from "./config.js";
 import { appendEvents, short, capDeep, resText } from "./recorder.js";
@@ -32,7 +32,7 @@ export default function (pi) {
 		} catch (error) {
 			if (!warned) {
 				warned = true;
-				ctx.ui?.notify(`agenttel: unable to write telemetry: ${error.message}`, "warning");
+				ctx.ui?.notify(`panopticon: unable to write telemetry: ${error.message}`, "warning");
 			}
 		}
 	};
@@ -86,8 +86,8 @@ export default function (pi) {
 		emit(ctx, "model_select", { to: `${e.model.provider}/${e.model.id}`, from: e.previousModel?.id }),
 	);
 
-	pi.registerCommand("agenttel", {
-		description: `Open the agenttel viewer (${URL})`,
+	pi.registerCommand("panopticon", {
+		description: `Open the panopticon viewer (${URL})`,
 		handler: (_args, ctx) => openViewer((message, level) => ctx.ui.notify(message, level)),
 	});
 }

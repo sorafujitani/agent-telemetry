@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>agenttel</title>
+<title>panopticon</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
   :root { color-scheme: dark; --bg:#0f1115; --fg:#d8dee9; --dim:#7b8494; --card:#171a21; --line:#262b36; --ok:#5fb865; --err:#e06c75; --warn:#e5c07b; --acc:#61afef; --model:#4a5160; }
@@ -60,6 +60,7 @@
   .tool { display:grid; grid-template-columns:18px 110px 64px 56px 1fr; gap:12px; padding:3px 4px; cursor:pointer; align-items:baseline; }
   .tool > span { white-space:nowrap; } .tool .sz { color:var(--dim); text-align:right; font-size:12px; } .tool .ms { text-align:right; }
   .tool .name { color:var(--acc); } .tool.nested .name { color:var(--dim); }
+  .tool.parallel { background:#61afef12; } .tool.parallel .name { color:#8acfff; } .tool.sel .name { color:var(--warn); }
   .tool:hover { background:#1d212b; }
   .tool.nested { margin-left:24px; grid-template-columns:18px 86px 64px 56px 1fr; }
   .tool .args { color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -70,7 +71,11 @@
   .gantt { position:relative; height:calc(var(--rows) * 8px + 16px); margin:4px 0 6px 4px; border-left:1px solid var(--line); border-bottom:1px solid var(--line); }
   .gantt i { position:absolute; height:6px; background:var(--acc); border-radius:2px; cursor:pointer; opacity:.9; }
   .gantt i.nested { background:#3d7fb5; height:4px; margin-top:1px; } .gantt i.e { background:var(--err); } .gantt i.r { background:var(--ok); } .gantt i.focus { outline:2px solid var(--warn); }
+  .gantt i.parallel:not(.e):not(.r) { background:#8acfff; opacity:1; }
+  .gantt.has-focus i:not(.focus):not(.parallel) { opacity:.25; }
+  .gantt i.focus::before { content:""; position:absolute; left:-3px; top:50%; transform:translateY(-50%); width:6px; height:6px; border-radius:50%; background:var(--warn); }
   .gantt i:hover { opacity:1; filter:brightness(1.3); }
+  .selection-key { display:none; } main.has-detail .selection-key { display:inline; }
   .gantt b { position:absolute; bottom:-16px; font-size:10px; color:var(--dim); font-weight:normal; }
   h4 { margin:6px 0 2px; font-size:12px; color:var(--dim); font-weight:normal; }
   pre { margin:0; padding:8px 10px; background:var(--bg); border:1px solid var(--line); border-radius:4px; white-space:pre-wrap; word-break:break-all; max-height:24em; overflow:auto; font-size:13px; }
@@ -105,7 +110,7 @@
       <span class="tools"><input type="search" id="tq" placeholder="filter tool / args">
         <button data-f="err">errors</button><button data-f="slow">slow &gt;10s</button>
         <button data-f="notify" title="desktop notification when a run ends while this tab is hidden">🔔</button>
-        <span class="dim" style="padding-left:8px" title="click a row for details"><span style="color:var(--model)">■</span> model <span class="acc">■</span> tools</span></span></div>
+        <span class="dim" style="padding-left:8px" title="click a row for details"><span style="color:var(--model)">■</span> model <span class="acc">■</span> tools<span class="selection-key"> · <span style="color:var(--warn)">●</span> selected <span style="color:#8acfff">■</span> overlapping</span></span></span></div>
   </div>
   <div id="body"></div>
   <div id="detail"></div>
@@ -149,7 +154,9 @@ const TRUNC = `<span class="tag warn" title="recorded with an older 200-char cap
 // overlap of tool-call time windows inside one turn = what ran in parallel
 const endOf = c => c.ms == null ? Date.now() : c.t + c.ms;
 const overlaps = (a, b) => a !== b && a.t < endOf(b) && b.t < endOf(a);
-const peers = (c, t) => (t?.tools ?? []).filter(o => overlaps(c, o) && o.parent !== c.id && c.parent !== o.id);
+const isPeer = (a, b) => !!a && !!b && a.run === b.run && a.turn === b.turn && overlaps(a, b) && a.parent !== b.id && b.parent !== a.id;
+const peers = (c, t) => (t?.tools ?? []).filter(o => isPeer(c, o));
+const turnOf = c => c?.run?.turns.find(t => t.turn === c.turn);
 const MAIN = { bash:"command", Bash:"command", read:"path", Read:"file_path", write:"path", Write:"file_path", edit:"path", Edit:"file_path", apply_patch:"command", codemode:"code", web_search:"query", fetch_content:"url" };
 function summ(tool, args) {
   const p = lenient(args); if (!p) return esc(args);
@@ -285,18 +292,19 @@ function renderTurn(t) {
 }
 
 const mark = c => c.ms==null?'<span class="live">●</span>':c.isError==null?'<span class="dim" title="terminal status unavailable">?</span>':c.isError?'<span class="err">✗</span>':'<span class="ok">✓</span>';
-function renderTool(c, t) {
+function renderTool(c, t = turnOf(c)) {
   const n = t ? peers(c, t).length : 0;
-  return `<div class="tool ${c.parent?"nested":""} ${sel===c.id?"sel":""} ${match(c)?"":"hide"}" data-id="${esc(c.id)}">
+  const parallel = isPeer(c, sessions.get(selected)?.tools.get(sel));
+  return `<div class="tool ${c.parent?"nested":""} ${sel===c.id?"sel":""} ${parallel?"parallel":""} ${match(c)?"":"hide"}" data-id="${esc(c.id)}">
     <span>${mark(c)}</span><span class="name">${esc(c.tool)}${n ? `<span class="par" title="${n} concurrent">∥${n}</span>` : ""}</span><span class="ms ${c.ms>10e3?"slow":""}">${ms(c.ms)}</span><span class="sz">${c.out!=null?fmt(c.out)+"c":""}</span>
     <span class="args">${summ(c.tool, c.args)}</span></div>`;
 }
 
 // per-turn gantt: x = time since the turn started; bars on the same x range ran in parallel
-function gantt(t, focus) {
+function gantt(t, focus = sessions.get(selected)?.tools.get(sel)) {
   const t0 = t.t, end = Math.max(t.t + (t.ms ?? 0), ...t.tools.map(endOf)), span = Math.max(1, end - t0);
   const x = v => (100 * (v - t0) / span).toFixed(2) + "%";
-  return `<div class="gantt" style="--rows:${t.tools.length}">${t.tools.map((c, i) => `<i class="${c.isError?"e":c.ms==null?"r":""} ${c.parent?"nested":""} ${focus===c?"focus":""}" data-id="${esc(c.id)}" style="top:${i*8}px;left:${x(c.t)};width:max(2px,${(100*(endOf(c)-c.t)/span).toFixed(2)}%)" title="${esc(c.tool)} ${ms(c.ms)} · +${ms(c.t - t0)}"></i>`).join("")}
+  return `<div class="gantt ${t.tools.includes(focus)?"has-focus":""}" style="--rows:${t.tools.length}">${t.tools.map((c, i) => `<i class="${c.isError?"e":c.ms==null?"r":""} ${c.parent?"nested":""} ${focus===c?"focus":""} ${isPeer(c, focus)?"parallel":""}" data-id="${esc(c.id)}" style="top:${i*8}px;left:${x(c.t)};width:max(2px,${(100*(endOf(c)-c.t)/span).toFixed(2)}%)" title="${esc(c.tool)} ${ms(c.ms)} · +${ms(c.t - t0)}"></i>`).join("")}
     <b style="left:${x(t0)}">0</b><b style="left:${x(end)};transform:translateX(-100%)">${ms(span)}</b></div>`;
 }
 
@@ -315,7 +323,7 @@ function executedBody(c, s, a) {
     case "write": return `<div class="kvs"><span>file</span><span>${esc(a.path ?? a.file_path)}</span><span>size</span><span>${fmt((a.content||"").length)} chars</span></div><pre>${esc(a.content)}</pre>`;
     case "edit": { const edits = a.edits ?? [{ oldText:a.old_string, newText:a.new_string }]; return `<div class="kvs"><span>file</span><span>${esc(a.path ?? a.file_path)}</span><span>edits</span><span>${edits.length}</span>${a.replace_all ? "<span>replace all</span><span>yes</span>" : ""}</div>` + edits.map((e, i) => `<h5>edit ${i+1}</h5><pre class="diff">${diff(e.oldText, e.newText)}</pre>`).join(""); }
     case "codemode": { const kids = [...s.tools.values()].filter(k => k.parent === c.id);
-      return `<pre class="sh">${esc(a.code)}</pre>${kids.length ? `<h5>nested calls (${kids.length})</h5>` + kids.map(renderTool).join("") : ""}`; }
+      return `<pre class="sh">${esc(a.code)}</pre>${kids.length ? `<h5>nested calls (${kids.length})</h5>` + kids.map(k => renderTool(k)).join("") : ""}`; }
     default: return `<div class="kvs">${Object.entries(a).map(([k, v]) => `<span>${esc(k)}</span><span>${esc(typeof v === "string" ? v : JSON.stringify(v))}</span>`).join("")}</div>`;
   }
 }
@@ -328,7 +336,7 @@ function renderDetail() {
   const status = c.ms==null?'<span class="live">● running</span>':c.isError==null?'<span class="dim">? status unknown</span>':c.isError?'<span class="err">✗ error</span>':'<span class="ok">✓ ok</span>';
   setHTML(detail, `<div class="dh"><span class="name">${esc(c.tool)}</span>${status}<span class="dim">run #${c.run?.n} · turn ${c.turn}</span><button id="dclose" title="Esc">✕ close</button></div>
   <div class="kvs"><span>started</span><span>${new Date(c.t).toLocaleTimeString()}</span><span>duration</span><span class="${c.ms>10e3?"warn":""}">${ms(c.ms)}</span><span>output size</span><span>${c.out!=null?fmt(c.out)+" chars":"–"}</span>${parent?`<span>called by</span><span class="tool-link" data-id="${esc(parent.id)}" style="cursor:pointer;color:var(--acc)">${esc(parent.tool)} ↗</span>`:""}<span>id</span><span class="dim">${esc(c.id)}</span></div>
-  ${(() => { const t = c.run?.turns.find(t => t.turn === c.turn), ps = peers(c, t); return ps.length ? `<h4>Parallel <small>${ps.length} overlapping</small></h4>${gantt(t, c)}${ps.map(renderTool).join("")}` : ""; })()}
+  ${(() => { const t = turnOf(c), ps = peers(c, t); return ps.length ? `<h4>Parallel <small>${ps.length} overlapping</small></h4>${gantt(t, c)}${ps.map(p => renderTool(p, t)).join("")}` : ""; })()}
   <h4>Executed ${lenient(c.args)?.truncated ? TRUNC : ""}</h4>${executed(c, s)}
   <h4>Result${c.ms==null?` <span class="tag live">running</span>`:c.isError?` <span class="tag err">error</span>`:""}${c.out>32000?` <span class="tag">first 32k characters</span>`:""}</h4><pre class="${c.isError?"err":""}">${c.result != null ? esc(c.result) : c.ms == null ? "" : c.out ? `<span class="dim">not recorded</span>` : "(empty)"}</pre>
   <h4>Arguments ${lenient(c.args)?.truncated ? TRUNC : ""}</h4><pre>${esc(pretty(c.args))}</pre>`);
@@ -363,7 +371,7 @@ function renderExec(s) {
   ${rows.map(b => `<tr><td>${esc(b.tool)}</td><td class="n">${b.n}</td><td class="n ${b.err?"err":""}">${fmt(b.err)}</td><td class="n">${ms(b.ms)}</td><td class="n">${ms(Math.round(b.ms/b.n))}</td><td class="n">${ms(b.max)}</td><td class="n">${fmt(b.out)}c</td><td>${bar(b.ms, top, "tool")}${pc(b.ms, sumRows)}</td></tr>`).join("")}</table>
   <h3>slowest tool calls</h3>
   <table><tr><th>ms</th><th>tool</th><th>run/turn</th><th>args</th></tr>
-  ${slowTools.map(c => `<tr class="tool ${sel===c.id?"sel":""}" data-id="${esc(c.id)}"><td class="${c.ms>10e3?"warn":""}">${ms(c.ms)}</td><td>${c.isError?'<span class="err">✗</span> ':""}${esc(c.tool)}</td><td class="dim">#${c.run?.n}/${c.turn}</td><td class="w">${summ(c.tool, c.args)}</td></tr>`).join("")}</table>
+  ${slowTools.map(c => `<tr class="tool ${sel===c.id?"sel":""} ${isPeer(c, s.tools.get(sel))?"parallel":""}" data-id="${esc(c.id)}"><td class="${c.ms>10e3?"warn":""}">${ms(c.ms)}</td><td>${c.isError?'<span class="err">✗</span> ':""}${esc(c.tool)}</td><td class="dim">#${c.run?.n}/${c.turn}</td><td class="w">${summ(c.tool, c.args)}</td></tr>`).join("")}</table>
   <h3>slowest ${s.scope === "response" ? "responses" : "model turns"}</h3>
   <table><tr><th>${s.scope === "response" ? "response ms" : "model ms"}</th><th>run/turn</th><th class="n">in</th><th class="n">out</th><th class="n">think</th><th class="n">cache hit</th><th class="n">cost</th><th>ctx</th><th>stop</th><th>text</th></tr>
   ${slowTurns.map(t => { const u = t.usage||{}, h = hit(u); return `<tr><td class="${t.modelMs>60e3?"warn":""}">${ms(t.run.scope === "response" ? t.ms : t.modelMs)}</td><td class="dim">#${t.run.n}/${t.turn}</td><td class="n">${fmt(u.input)}</td><td class="n">${fmt(u.output)}</td><td class="n">${fmt(u.reasoning)}</td><td class="n">${h!=null?Math.round(h*100)+"%":"–"}</td><td class="n">${usd(u.cost?.total) ?? "–"}</td><td>${fmt(t.ctx)}</td><td>${esc(t.stop)}</td><td class="w">${esc(t.text)}</td></tr>`; }).join("")}</table>
@@ -381,8 +389,15 @@ function keepAnchored(el, fn) {
 }
 function selectTool(id, anchor) {
   sel = sel === id ? null : id;
-  for (const el of body.querySelectorAll(".tool.sel")) el.classList.remove("sel");
-  if (sel) for (const el of body.querySelectorAll(`.tool[data-id="${CSS.escape(sel)}"]`)) el.classList.add("sel");
+  const s = sessions.get(selected), focus = s?.tools.get(sel);
+  for (const chart of body.querySelectorAll(".gantt")) chart.classList.remove("has-focus");
+  for (const el of body.querySelectorAll(".tool, .gantt i")) {
+    const c = s?.tools.get(el.dataset.id), row = el.classList.contains("tool");
+    const focused = !!c && c === focus;
+    el.classList.toggle(row ? "sel" : "focus", focused);
+    el.classList.toggle("parallel", isPeer(c, focus));
+    if (!row && focused) el.parentElement.classList.add("has-focus");
+  }
   keepAnchored(anchor, renderDetail);
 }
 function selectSession(sid) { selected = sid; sel = null; renderSide(); renderStats(sessions.get(sid)); renderBody(true); renderDetail(); }
