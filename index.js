@@ -1,7 +1,9 @@
 /** Record Pi lifecycle events locally; /panopticon opens the live viewer. */
-import { openViewer } from "./viewer.js";
+
 import { URL } from "./config.js";
-import { appendEvents, short, capDeep, resText } from "./recorder.js";
+import { appendEvents, capDeep, resText, short } from "./recorder.js";
+import { openViewer } from "./viewer.js";
+
 const partsOf = (m, type, key) =>
 	(m?.content ?? [])
 		.filter((c) => c.type === type)
@@ -64,7 +66,12 @@ export default function (pi) {
 	});
 	pi.on("tool_execution_start", (e, ctx) => {
 		toolStart.set(e.toolCallId, Date.now());
-		emit(ctx, "tool_start", { id: e.toolCallId, parent: e.parentToolCallId, tool: e.toolName, args: JSON.stringify(capDeep(e.args)) });
+		emit(ctx, "tool_start", {
+			id: e.toolCallId,
+			parent: e.parentToolCallId,
+			tool: e.toolName,
+			args: JSON.stringify(capDeep(e.args)),
+		});
 	});
 	pi.on("tool_execution_end", (e, ctx) => {
 		const s = toolStart.get(e.toolCallId);
@@ -83,7 +90,10 @@ export default function (pi) {
 	pi.on("agent_end", (_e, ctx) => emit(ctx, "run_end", { ms: Date.now() - runStart }));
 	pi.on("session_compact", (e, ctx) => emit(ctx, "compact", { reason: e.reason }));
 	pi.on("model_select", (e, ctx) =>
-		emit(ctx, "model_select", { to: `${e.model.provider}/${e.model.id}`, from: e.previousModel?.id }),
+		emit(ctx, "model_select", {
+			to: `${e.model.provider}/${e.model.id}`,
+			from: e.previousModel?.id,
+		}),
 	);
 
 	pi.registerCommand("panopticon", {

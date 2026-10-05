@@ -1,26 +1,62 @@
 {
-  "name": "panopticon",
-  "version": "0.1.0",
-  "description": "Local telemetry and live trace viewer for Pi, Codex, and Claude Code",
-  "type": "module",
-  "packageManager": "pnpm@11.18.0",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/sorafujitani/panopticon.git"
-  },
-  "bugs": {
-    "url": "https://github.com/sorafujitani/panopticon/issues"
-  },
-  "homepage": "https://github.com/sorafujitani/panopticon#readme",
-  "keywords": ["pi-package", "pi", "codex", "claude-code", "telemetry", "panopticon"],
-  "engines": { "node": ">=22" },
-  "bin": { "panopticon": "./server.js" },
-  "exports": { ".": "./index.js" },
-  "files": ["index.js", "config.js", "recorder.js", "hooks.js", "setup.js", "viewer.js", "server.js", "index.html", "favicon.svg", "skills/panopticon"],
-  "pi": { "extensions": ["./index.js"] },
-  "scripts": {
-    "test": "node --test",
-    "prepack": "pnpm test"
-  }
+	"name": "panopticon",
+	"version": "0.1.0",
+	"description": "Local telemetry and live trace viewer for Pi, Codex, and Claude Code",
+	"type": "module",
+	"packageManager": "pnpm@11.18.0",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/sorafujitani/panopticon.git"
+	},
+	"bugs": {
+		"url": "https://github.com/sorafujitani/panopticon/issues"
+	},
+	"homepage": "https://github.com/sorafujitani/panopticon#readme",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"codex",
+		"claude-code",
+		"telemetry",
+		"panopticon"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"bin": {
+		"panopticon": "./server.js"
+	},
+	"exports": {
+		".": "./index.js"
+	},
+	"files": [
+		"index.js",
+		"config.js",
+		"recorder.js",
+		"hooks.js",
+		"setup.js",
+		"viewer.js",
+		"server.js",
+		"http-server.js",
+		"index.html",
+		"web",
+		"favicon.svg",
+		"skills/panopticon"
+	],
+	"pi": {
+		"extensions": [
+			"./index.js"
+		]
+	},
+	"scripts": {
+		"test": "node --test",
+		"lint": "biome check . --error-on-warnings",
+		"format": "biome format --write .",
+		"check": "pnpm lint && pnpm test",
+		"prepack": "pnpm check"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.15"
+	}
 }

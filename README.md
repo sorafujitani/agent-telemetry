@@ -168,11 +168,17 @@ Launch the agent from the same environment. Hook setup prints the settings, skil
 
 ```sh
 pnpm install
-pnpm test
+pnpm check   # formatting, lint, and tests
+pnpm format  # apply formatting
 pnpm pack
 ```
 
-Runtime code is plain JavaScript with no build step or runtime dependencies. Tests pack and install the distributable and exercise recording, safe setup, the viewer, and skill registration. Packing and publishing run tests through `prepack`; logs and tests are excluded from the package.
+Runtime code is plain JavaScript with no build step or runtime dependencies. Biome is a development-only formatter and linter. `pnpm test` runs tests alone; they pack and install the distributable and exercise recording, safe setup, the viewer, and skill registration. Packing and publishing run all checks through `prepack`; logs, tests, and development configuration are excluded from the package.
+
+- `server.js`: CLI dispatch; `http-server.js`: HTTP, SSE, and the bundled asset allowlist.
+- `index.js`, `hooks.js`, `recorder.js`: Pi events, command Hooks, and the shared JSONL writer.
+- `index.html`, `web/app.js`, `web/style.css`: viewer markup, behavior, and styles. No bundler is needed.
+- `setup.js`, `viewer.js`: agent setup and viewer launch.
 
 npm publication is a separate maintainer action; installation and setup do not publish anything. When ready:
 
