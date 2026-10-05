@@ -177,15 +177,22 @@ const costChip = c => chip("cost", usd(c) ?? "–", "cost");
 function ingest(e) {
   let s = sessions.get(e.sid);
   if (!s) { s = { sid:e.sid, source:e.source ?? "pi", scope:e.scope, cwd:e.cwd, pid:e.pid, runs:[], tools:new Map(), compacts:0, cost:null, ver:0 }; sessions.set(e.sid, s); }
-  Object.assign(s, { model:e.model ?? s.model, ctx:e.ctx ?? s.ctx, win:e.win ?? s.win, last:e.t });
+  Object.assign(s, { model:e.model ?? s.model, ctx:e.ctx ?? s.ctx, win:e.win ?? s.win, last:Math.max(s.last ?? e.t, e.t) });
   s.ver++; dirtySide = true;
-  // Hooks may be enabled during a response, after the prompt hook has already fired.
-  if (e.scope === "response" && e.type === "tool_start" && !s.busy) {
-    ingest({ ...e, type:"run_start", prompt:"[recording started during response]" });
-    ingest({ ...e, type:"turn_start", turn:0 });
+  // Recording, clearing, or a bounded replay can miss the run/turn start events.
+  const activity = ["turn_start", "turn_end", "tool_start", "tool_end"].includes(e.type);
+  const start = { ...e, t:e.ms == null ? e.t : e.t - e.ms };
+  if (activity && !s.busy && (e.scope !== "response" || e.type === "tool_start")) {
+    ingest({ ...start, type:"run_start", prompt:`[recording started during ${e.scope === "response" ? "response" : "run"}]` });
   }
   const run = s.runs[s.runs.length-1];
+  if (activity && run && !run.turns.length && e.type !== "turn_start") {
+    ingest({ ...start, type:"turn_start", turn:e.turn ?? 0 });
+  }
   const turn = run?.turns[run.turns.length-1];
+  if (e.type === "tool_end" && !s.tools.has(e.id) && e.ms != null) {
+    ingest({ ...start, type:"tool_start", args:e.args ?? "" });
+  }
   switch (e.type) {
     case "run_start": s.runs.push({ n:s.runs.length+1, scope:e.scope, t:e.t, prompt:e.prompt, promptChars:e.promptChars, sysChars:e.sysChars, ntools:e.tools, turns:[], ms:null, in:null, out:null, cache:null, cost:null }); s.busy = true; s.title ??= e.prompt; open.add(e.sid + "run" + s.runs.length); break;
     case "turn_start": if (run) run.turns.push({ run, t:e.t, turn:e.turn, tools:[], ms:null }); break;

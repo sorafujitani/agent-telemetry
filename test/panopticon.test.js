@@ -303,6 +303,56 @@ test("viewer derives hook durations, isolates sessions, and keeps unavailable va
 	assert.equal(viewer.sessions.size, 4);
 });
 
+test("viewer recovers Pi runs when recording begins after lifecycle start events", () => {
+	const script = readFileSync(join(installed, "index.html"), "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
+	const viewer = runInNewContext(`${script.split("// ---- interaction:")[0]}\n({ ingest, sessions, allTools, renderRun, renderExec })`);
+	const events = [
+		{ type: "run_start", t: 1000, prompt: "original prompt" },
+		{ type: "turn_start", t: 1000, turn: 23 },
+		{ type: "tool_start", t: 1100, id: "web", tool: "web_search", args: '{"query":"example"}' },
+		{ type: "tool_end", t: 1500, id: "web", tool: "web_search", ms: 400, isError: false, result: "found", out: 5 },
+		{ type: "turn_end", t: 1600, turn: 23, ms: 600, text: "answer" },
+		{ type: "run_end", t: 1700, ms: 700 },
+	];
+	for (const first of ["turn_start", "tool_start", "tool_end", "turn_end"]) {
+		const start = events.findIndex(e => e.type === first);
+		const emit = e => viewer.ingest({ sid: first, source: "pi", ...e });
+		emit(events[start]);
+		const s = viewer.sessions.get(first);
+		assert.equal(s.runs.length, 1, first);
+		assert.equal(s.runs[0].turns.length, 1, first);
+		assert.equal(s.last, events[start].t, first);
+		for (const e of events.slice(start + 1)) emit(e);
+		assert.equal(s.runs.length, 1, first);
+		assert.equal(s.runs[0].turns.length, 1, first);
+		assert.equal(s.runs[0].turns[0].text, "answer");
+		assert.equal(s.busy, false);
+		assert.equal(s.runs[0].in, null);
+		assert.equal(s.runs[0].cost, null);
+		assert.equal(s.last, 1700);
+		assert.match(viewer.renderRun(s.runs[0]), /recording started during run/);
+		assert.doesNotMatch(viewer.renderExec(s), /NaN|Infinity/);
+		if (first !== "turn_end") {
+			assert.equal(viewer.allTools(s).length, 1);
+			assert.equal(s.tools.get("web").ms, 400);
+			assert.equal(s.tools.get("web").result, "found");
+			assert.match(viewer.renderRun(s.runs[0]), /web_search/);
+		}
+		emit({ type: "run_start", t: 2000, prompt: "next prompt" });
+		emit({ type: "turn_start", t: 2000, turn: 0 });
+		assert.equal(s.runs.length, 2);
+		assert.equal(s.runs[1].prompt, "next prompt");
+	}
+	viewer.ingest({ sid: "idle", type: "model_select", t: 2000 });
+	assert.equal(viewer.sessions.get("idle").runs.length, 0);
+	viewer.ingest({ sid: "missing-turn", type: "run_start", t: 1000, prompt: "known prompt" });
+	viewer.ingest({ sid: "missing-turn", ...events[4] });
+	const s = viewer.sessions.get("missing-turn");
+	assert.equal(s.runs.length, 1);
+	assert.equal(s.runs[0].prompt, "known prompt");
+	assert.equal(s.runs[0].turns[0].text, "answer");
+});
+
 test("tool selection highlights the same parallel calls in the timeline and detail without replacing rows", () => {
 	const script = readFileSync(join(installed, "index.html"), "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
 	const element = (id, classes, parentElement) => {
